@@ -14,12 +14,15 @@ class JobFilter:
         "embedded c",
         "embedded linux",
         "embedded software",
+        "embedded systems",
         "firmware",
         "device driver",
+        "linux device driver",
         "driver development",
         "rtos",
         "freertos",
         "linux kernel",
+        "kernel driver",
         "arm",
         "microcontroller",
         "mcu",
@@ -31,6 +34,9 @@ class JobFilter:
         "esp32",
         "stm32",
         "bsp",
+        "u-boot",
+        "yocto",
+        "buildroot",
         "electronics",
         "ece",
     ]
@@ -40,6 +46,7 @@ class JobFilter:
         "c++",
         "linux",
         "embedded c",
+        "embedded systems",
         "firmware",
         "driver",
         "iot",
@@ -56,6 +63,11 @@ class JobFilter:
         "stm32",
         "embedded linux",
         "embedded software",
+        "yocto",
+        "buildroot",
+        "bsp",
+        "u-boot",
+        "linux kernel",
     ]
 
     ENTRY_LEVEL_KEYWORDS = [
@@ -73,6 +85,51 @@ class JobFilter:
         "0-2 years",
         "0 year",
         "0-2 year",
+    ]
+
+    HARDWARE_CONTEXT_KEYWORDS = [
+        "embedded",
+        "firmware",
+        "driver",
+        "linux kernel",
+        "device driver",
+        "linux device driver",
+        "kernel driver",
+        "bsp",
+        "u-boot",
+        "yocto",
+        "buildroot",
+        "arm",
+        "mcu",
+        "microcontroller",
+        "stm32",
+        "esp32",
+        "uart",
+        "spi",
+        "i2c",
+        "gpio",
+        "iot",
+        "rtos",
+        "freertos",
+        "embedded c",
+        "embedded software",
+    ]
+
+    GENERIC_UNRELATED_KEYWORDS = [
+        "software engineer",
+        "linux administrator",
+        "linux admin",
+        "frontend",
+        "backend",
+        "web developer",
+        "cloud engineer",
+        "devops",
+        "data engineer",
+        "crypto",
+        "sales",
+        "mechanical",
+        "civil",
+        "it support",
     ]
 
     @staticmethod
@@ -204,21 +261,91 @@ class JobFilter:
                 hits.append(keyword)
         return hits
 
+    def _has_embedded_hardware_context(self, text: str) -> bool:
+        embedded_hits = self._find_keyword_hits(text, self.PRIMARY_EMBEDDED_KEYWORDS)
+        if "linux kernel" in text and not any(term in text for term in [
+            "embedded",
+            "firmware",
+            "driver",
+            "bsp",
+            "u-boot",
+            "yocto",
+            "buildroot",
+            "arm",
+            "mcu",
+            "microcontroller",
+            "stm32",
+            "esp32",
+            "uart",
+            "spi",
+            "i2c",
+            "gpio",
+            "iot",
+            "rtos",
+            "freertos",
+            "device driver",
+            "kernel driver",
+            "linux device driver",
+        ]):
+            return False
+        hardware_hits = self._find_keyword_hits(text, self.HARDWARE_CONTEXT_KEYWORDS)
+        return bool(embedded_hits or hardware_hits)
+
+    def _is_generic_unrelated_role(self, text: str) -> bool:
+        if not text:
+            return False
+        if self._has_embedded_hardware_context(text):
+            return False
+        return any(keyword in text for keyword in self.GENERIC_UNRELATED_KEYWORDS)
+
     def document_matches_target(self, job: Job) -> bool:
         text = self._job_text(job).lower()
+        if not text:
+            return False
 
         primary_hits = self._find_keyword_hits(text, self.PRIMARY_EMBEDDED_KEYWORDS)
+        hardware_hits = self._find_keyword_hits(text, self.HARDWARE_CONTEXT_KEYWORDS)
+        support_hits = self._find_keyword_hits(text, self.SUPPORTING_KEYWORDS)
+
+        if "linux kernel" in text and not self._has_embedded_hardware_context(text):
+            return False
+
         if primary_hits:
             return True
 
-        if ("embedded" in text or "firmware" in text or "rtos" in text or "arm" in text or "linux" in text or "driver" in text or "mcu" in text or "microcontroller" in text or "iot" in text) and (
-            "c" in text or "c++" in text or "linux" in text or "firmware" in text or "rtos" in text or "arm" in text or "microcontroller" in text or "iot" in text
+        if "linux" in text and hardware_hits:
+            return True
+
+        if "firmware" in text and ("embedded" in text or "arm" in text or "mcu" in text or "microcontroller" in text or "iot" in text):
+            return True
+
+        if ("embedded" in text or "firmware" in text or "rtos" in text or "freertos" in text or "kernel" in text or "driver" in text) and (
+            "arm" in text
+            or "mcu" in text
+            or "microcontroller" in text
+            or "stm32" in text
+            or "esp32" in text
+            or "uart" in text
+            or "spi" in text
+            or "i2c" in text
+            or "gpio" in text
+            or "bsp" in text
+            or "yocto" in text
+            or "u-boot" in text
+            or "firmware" in text
+            or "driver" in text
+            or "embedded" in text
         ):
             return True
 
-        support_hits = self._find_keyword_hits(text, self.SUPPORTING_KEYWORDS)
-        if support_hits and any(token in text for token in ["embedded", "firmware", "linux", "driver", "microcontroller", "arm", "iot", "rtos"]):
+        if support_hits and any(token in text for token in ["embedded", "firmware", "driver", "microcontroller", "arm", "iot", "rtos", "freertos", "linux kernel", "bsp", "yocto", "u-boot"]):
             return True
+
+        if self._is_generic_unrelated_role(text):
+            return False
+
+        if "linux" in text and "kernel" in text and not hardware_hits:
+            return False
 
         return False
 
@@ -264,16 +391,15 @@ class JobFilter:
             "supporting_hits": [],
             "entry_hits": [],
             "location_hit": None,
+            "generic_unrelated_hits": [],
         }
 
         primary_hits = self._find_keyword_hits(text, self.PRIMARY_EMBEDDED_KEYWORDS)
-        for keyword in primary_hits:
-            score += 12
+        score += len(primary_hits) * 18
         breakdown["embedded_hits"] = primary_hits
 
         support_hits = self._find_keyword_hits(text, self.SUPPORTING_KEYWORDS)
-        for keyword in support_hits:
-            score += 4
+        score += len(support_hits) * 6
         breakdown["supporting_hits"] = support_hits
 
         entry_hits = self._find_keyword_hits(text, self.ENTRY_LEVEL_KEYWORDS)
@@ -292,8 +418,15 @@ class JobFilter:
 
         if "junior" in text:
             score += 5
+        if "graduate" in text:
+            score += 5
 
-        score = min(score, 100)
+        generic_hits = [keyword for keyword in self.GENERIC_UNRELATED_KEYWORDS if keyword in text]
+        breakdown["generic_unrelated_hits"] = generic_hits
+        if generic_hits and not self._has_embedded_hardware_context(text):
+            score -= 30
+
+        score = max(0, min(score, 100))
         job.match_breakdown = breakdown
         job.match_score = score
         return score
@@ -307,8 +440,13 @@ class JobFilter:
             reasons.append("Missing company name")
         if not self.normalize_url(job.url):
             reasons.append("Missing or invalid URL")
+
+        text = self._job_text(job).lower()
         if not self.document_matches_target(job):
-            reasons.append("No embedded firmware/RTOS/Linux/IoT or MCU keyword match")
+            if self._is_generic_unrelated_role(text):
+                reasons.append("Role appears unrelated to embedded/Linux hardware work")
+            else:
+                reasons.append("No strong embedded or hardware-relevant Linux context")
         if not self.is_entry_level_or_intern(job):
             reasons.append("No fresher/graduate/trainee/intern/junior/entry-level indicator")
         if not self.location_allowed(job):

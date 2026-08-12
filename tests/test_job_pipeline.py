@@ -198,7 +198,7 @@ def test_deduplicate_jobs_by_url_and_identity():
     assert {job.url for job in deduped} == {"https://example.com/job-1", "https://example.com/job-2"}
 
 
-def test_remote_worldwide_home_based_jobs_are_allowed():
+def test_linux_kernel_job_without_embedded_context_is_rejected():
     filterer = JobFilter()
     job = Job(
         title="Junior Linux Kernel Engineer - Ubuntu",
@@ -213,9 +213,164 @@ def test_remote_worldwide_home_based_jobs_are_allowed():
 
     filtered = filterer.filter_jobs([job])
 
+    assert filtered == []
+    assert any("embedded" in reason.lower() or "hardware" in reason.lower() for reason in job.rejection_reasons)
+
+
+def test_strong_embedded_c_fresher_job_is_accepted():
+    filterer = JobFilter()
+    job = Job(
+        title="Embedded C Firmware Engineer",
+        company="Astra Microsystems",
+        location="Hyderabad",
+        experience="Fresher",
+        source="RemoteOK",
+        url="https://example.com/embedded-c-fresher",
+        skills=["Embedded C", "UART", "SPI", "ARM"],
+        posted_date="2026-08-01",
+    )
+
+    filtered = filterer.filter_jobs([job])
+
     assert len(filtered) == 1
-    assert filtered[0].title == "Junior Linux Kernel Engineer - Ubuntu"
+    assert filtered[0].match_score >= 50
     assert filtered[0].rejection_reasons == []
+
+
+def test_embedded_linux_graduate_job_is_accepted():
+    filterer = JobFilter()
+    job = Job(
+        title="Embedded Linux Graduate Engineer",
+        company="IoT Robotics",
+        location="Bengaluru",
+        experience="Graduate Engineer",
+        source="Greenhouse",
+        url="https://example.com/embedded-linux-graduate",
+        skills=["Embedded Linux", "Linux Kernel", "C", "GPIO"],
+        posted_date="2026-08-02",
+    )
+
+    filtered = filterer.filter_jobs([job])
+
+    assert len(filtered) == 1
+    assert filtered[0].title == "Embedded Linux Graduate Engineer"
+    assert filtered[0].rejection_reasons == []
+
+
+def test_firmware_trainee_job_is_accepted():
+    filterer = JobFilter()
+    job = Job(
+        title="Firmware Engineer Trainee",
+        company="IoT Labs",
+        location="Hyderabad",
+        experience="Trainee",
+        source="Greenhouse",
+        url="https://example.com/firmware-trainee",
+        skills=["Firmware", "MCU", "C"],
+        posted_date="2026-08-03",
+    )
+
+    filtered = filterer.filter_jobs([job])
+
+    assert len(filtered) == 1
+    assert filtered[0].title == "Firmware Engineer Trainee"
+    assert filtered[0].rejection_reasons == []
+
+
+def test_rtos_freertos_junior_job_is_accepted():
+    filterer = JobFilter()
+    job = Job(
+        title="RTOS / FreeRTOS Junior Engineer",
+        company="Embedded Systems Co",
+        location="Pune",
+        experience="Junior",
+        source="RemoteOK",
+        url="https://example.com/rtos-junior",
+        skills=["FreeRTOS", "STM32", "C", "UART"],
+        posted_date="2026-08-04",
+    )
+
+    filtered = filterer.filter_jobs([job])
+
+    assert len(filtered) == 1
+    assert filtered[0].match_score >= 45
+    assert filtered[0].rejection_reasons == []
+
+
+def test_generic_software_graduate_job_is_rejected():
+    filterer = JobFilter()
+    job = Job(
+        title="Graduate Software Engineer",
+        company="CloudWorks",
+        location="Remote",
+        experience="Graduate",
+        source="RemoteOK",
+        url="https://example.com/software-graduate",
+        skills=["Python", "Django"],
+        posted_date="2026-08-05",
+    )
+
+    filtered = filterer.filter_jobs([job])
+
+    assert filtered == []
+    assert job.rejection_reasons
+
+
+def test_generic_linux_administrator_is_rejected():
+    filterer = JobFilter()
+    job = Job(
+        title="Junior Linux Administrator",
+        company="OpsWorks",
+        location="Remote",
+        experience="Junior",
+        source="RemoteOK",
+        url="https://example.com/linux-admin",
+        skills=["Linux", "Bash", "Docker"],
+        posted_date="2026-08-06",
+    )
+
+    filtered = filterer.filter_jobs([job])
+
+    assert filtered == []
+    assert any("linux" in reason.lower() or "embedded" in reason.lower() for reason in job.rejection_reasons)
+
+
+def test_unrelated_junior_job_is_rejected():
+    filterer = JobFilter()
+    job = Job(
+        title="Junior Sales Executive",
+        company="MarketForge",
+        location="Hyderabad",
+        experience="Junior",
+        source="RemoteOK",
+        url="https://example.com/sales-junior",
+        skills=["Sales", "CRM"],
+        posted_date="2026-08-07",
+    )
+
+    filtered = filterer.filter_jobs([job])
+
+    assert filtered == []
+    assert job.rejection_reasons
+
+
+def test_missing_or_null_fields_are_handled():
+    filterer = JobFilter()
+    job = Job(
+        title=None,
+        company="",
+        location=None,
+        experience="Junior",
+        source="RemoteOK",
+        url="",
+        skills=None,
+        posted_date="",
+    )
+
+    filtered = filterer.filter_jobs([job])
+
+    assert filtered == []
+    assert job.rejection_reasons
 
 
 def test_search_manager_handles_provider_failures_without_stopping_others():
