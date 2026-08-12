@@ -7,60 +7,60 @@ from utils.logger import app_logger
 
 class GreenhouseProvider(BaseProvider):
 
+    BOARDS = [
+        ("Canonical", "https://boards-api.greenhouse.io/v1/boards/canonical/jobs"),
+        ("Samsara", "https://boards-api.greenhouse.io/v1/boards/samsara/jobs"),
+        ("Flock Safety", "https://boards-api.greenhouse.io/v1/boards/flocksafety/jobs"),
+    ]
+
     def search(self):
 
         jobs = []
 
-        boards = [
-            ("Canonical", "https://boards-api.greenhouse.io/v1/boards/canonical/jobs"),
-            ("Samsara", "https://boards-api.greenhouse.io/v1/boards/samsara/jobs"),
-            ("Flock Safety", "https://boards-api.greenhouse.io/v1/boards/flocksafety/jobs"),
-        ]
-
-        for company_name, url in boards:
+        for company_name, url in self.BOARDS:
 
             try:
                 app_logger.debug(f"Fetching Greenhouse jobs for {company_name}...")
                 response = httpx.get(url, timeout=20)
                 response.raise_for_status()
-
                 data = response.json()
-                count = 0
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code if exc.response is not None else "unknown"
+                app_logger.warning(f"Greenhouse {company_name} returned HTTP {status}: {exc}")
+                continue
+            except (httpx.TimeoutException, httpx.RequestError, ValueError) as exc:
+                app_logger.warning(f"Greenhouse {company_name} request failed: {exc}")
+                continue
 
-                for item in data.get("jobs", []):
+            count = 0
 
-                    title = item.get("title", "")
+            for item in data.get("jobs", []):
+                if not isinstance(item, dict):
+                    continue
 
-                    if not any(
-                        keyword.lower() in title.lower()
-                        for keyword in [
-                            "embedded",
-                            "firmware",
-                            "linux",
-                            "c",
-                            "driver",
-                            "hardware",
-                        ]
-                    ):
-                        continue
+                title = item.get("title") or ""
+                if not title:
+                    continue
 
-                    jobs.append(
-                        Job(
-                            title=title,
-                            company=company_name,
-                            location=item.get("location", {}).get("name", "Unknown"),
-                            experience="Not Specified",
-                            source="Greenhouse",
-                            url=item.get("absolute_url", ""),
-                            skills=[],
-                            posted_date="",
-                        )
+                location = item.get("location", {}).get("name") or "Remote"
+                url_value = item.get("absolute_url") or item.get("url") or ""
+                if not url_value:
+                    continue
+
+                jobs.append(
+                    Job(
+                        title=title,
+                        company=company_name,
+                        location=location,
+                        experience="Not Specified",
+                        source="Greenhouse",
+                        url=url_value,
+                        skills=[],
+                        posted_date=item.get("updated_at") or "",
                     )
-                    count += 1
-                
-                app_logger.debug(f"Found {count} matching jobs for {company_name} on Greenhouse.")
+                )
+                count += 1
 
-            except Exception as e:
-                app_logger.error(f"Greenhouse Error for {company_name}: {e}")
+            app_logger.debug(f"Found {count} matching jobs for {company_name} on Greenhouse.")
 
         return jobs

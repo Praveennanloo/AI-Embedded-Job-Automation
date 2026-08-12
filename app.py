@@ -7,7 +7,6 @@ from utils.logger import app_logger
 from search_engine.search_manager import SearchManager
 from ai_engine.job_filter import JobFilter
 
-from search_engine.providers.dummy_provider import DummyProvider
 from search_engine.providers.remoteok_provider import RemoteOKProvider
 from search_engine.providers.greenhouse_provider import GreenhouseProvider
 
@@ -27,7 +26,6 @@ def main():
     job_filter = JobFilter()
 
     # Register Providers
-    manager.register_provider(DummyProvider())
     manager.register_provider(RemoteOKProvider())
     manager.register_provider(GreenhouseProvider())
 

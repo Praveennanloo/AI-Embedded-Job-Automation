@@ -2,6 +2,7 @@ import httpx
 
 from models.job import Job
 from search_engine.providers.base_provider import BaseProvider
+from utils.logger import app_logger
 
 
 class RemoteOKProvider(BaseProvider):
@@ -16,15 +17,26 @@ class RemoteOKProvider(BaseProvider):
             "User-Agent": "Mozilla/5.0"
         }
 
-        response = httpx.get(
-            self.API_URL,
-            headers=headers,
-            timeout=20
-        )
+        try:
+            response = httpx.get(
+                self.API_URL,
+                headers=headers,
+                timeout=20,
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code if exc.response is not None else "unknown"
+            app_logger.warning(f"RemoteOK returned HTTP {status}: {exc}")
+            return []
+        except (httpx.TimeoutException, httpx.NetworkError, httpx.RequestError) as exc:
+            app_logger.warning(f"RemoteOK request failed: {exc}")
+            return []
 
-        response.raise_for_status()
-
-        data = response.json()
+        try:
+            data = response.json()
+        except ValueError as exc:
+            app_logger.warning(f"RemoteOK returned invalid JSON: {exc}")
+            return []
 
         for item in data:
 
@@ -37,13 +49,9 @@ class RemoteOKProvider(BaseProvider):
                 continue
 
             company = item.get("company", "Unknown")
-
             location = item.get("location", "Remote")
-
             url = item.get("url", "")
-
             tags = item.get("tags", [])
-
             date = item.get("date", "")
 
             jobs.append(
@@ -55,7 +63,7 @@ class RemoteOKProvider(BaseProvider):
                     source="RemoteOK",
                     url=url,
                     skills=tags,
-                    posted_date=date
+                    posted_date=date,
                 )
             )
 
