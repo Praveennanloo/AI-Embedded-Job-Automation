@@ -56,6 +56,17 @@ def main():
         for reason, count in list(rejection_counts.items())[:10]:
             console.print(f"- {reason}: {count}")
 
+    rejected_samples = summary.get("rejected_samples", [])
+    if rejected_samples:
+        console.print("\n[bold]Representative Rejected Job Samples[/bold]")
+        for sample in rejected_samples[:5]:
+            console.print(f"- Title: {sample['title']} | Company: {sample['company']} | Location: {sample['location']} | Source: {sample['source']}")
+            console.print(f"  Description Available: {sample['description_available']} | Skills Available: {sample['skills_available']} | Experience: {sample['experience']}")
+            console.print(f"  Embedded matches: {sample['embedded_keyword_matches']}")
+            console.print(f"  Entry-level matches: {sample['entry_level_keyword_matches']}")
+            console.print(f"  Location matches: {sample['location_matches']}")
+            console.print(f"  Rejection reasons: {sample['rejection_reasons']}")
+
     console.print(f"\n[bold yellow]Filtered Jobs Found : {len(accepted_jobs)}[/bold yellow]")
 
     for index, job in enumerate(accepted_jobs[:10], start=1):

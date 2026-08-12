@@ -198,6 +198,26 @@ def test_deduplicate_jobs_by_url_and_identity():
     assert {job.url for job in deduped} == {"https://example.com/job-1", "https://example.com/job-2"}
 
 
+def test_remote_worldwide_home_based_jobs_are_allowed():
+    filterer = JobFilter()
+    job = Job(
+        title="Junior Linux Kernel Engineer - Ubuntu",
+        company="Canonical",
+        location="Home based - Worldwide",
+        experience="Not Specified",
+        source="Greenhouse",
+        url="https://example.com/junior-linux-kernel",
+        skills=[],
+        posted_date="2026-08-01",
+    )
+
+    filtered = filterer.filter_jobs([job])
+
+    assert len(filtered) == 1
+    assert filtered[0].title == "Junior Linux Kernel Engineer - Ubuntu"
+    assert filtered[0].rejection_reasons == []
+
+
 def test_search_manager_handles_provider_failures_without_stopping_others():
     manager = SearchManager()
     manager.register_provider(DummyProviderA())

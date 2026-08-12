@@ -241,8 +241,19 @@ class JobFilter:
         if not location_text:
             return True
 
+        normalized_location = re.sub(r"\s+", " ", location_text).strip()
+        remote_indicators = [
+            "remote",
+            "home based",
+            "home-based",
+            "worldwide",
+            "global",
+        ]
+        if any(indicator in normalized_location for indicator in remote_indicators):
+            return True
+
         location_keywords = [keyword.lower() for keyword in settings.LOCATION_KEYWORDS]
-        return any(keyword in location_text for keyword in location_keywords)
+        return any(keyword in normalized_location for keyword in location_keywords)
 
     def calculate_score(self, job: Job) -> int:
         text = self._job_text(job).lower()
@@ -305,6 +316,25 @@ class JobFilter:
 
         return reasons
 
+    def diagnostic_sample(self, job: Job, reasons: List[str]) -> dict:
+        text = self._job_text(job).lower()
+        return {
+            "title": self.normalize_text(job.title),
+            "company": self.normalize_text(job.company),
+            "location": self.normalize_text(job.location),
+            "source": self.normalize_text(job.source),
+            "description_available": bool(getattr(job, "description", "")),
+            "skills_available": bool((job.skills or [])),
+            "experience": self.normalize_text(job.experience),
+            "embedded_keyword_matches": self._find_keyword_hits(text, self.PRIMARY_EMBEDDED_KEYWORDS),
+            "entry_level_keyword_matches": self._find_keyword_hits(text, self.ENTRY_LEVEL_KEYWORDS),
+            "location_matches": [
+                keyword for keyword in [kw.lower() for kw in settings.LOCATION_KEYWORDS]
+                if keyword in text
+            ],
+            "rejection_reasons": list(reasons),
+        }
+
     def filter_jobs(self, jobs):
         normalized_jobs = []
         original_jobs = {}
@@ -316,6 +346,7 @@ class JobFilter:
             "rejected": 0,
             "rejection_counts": {},
             "accepted_jobs": [],
+            "rejected_samples": [],
         }
 
         for original_job in jobs:
@@ -371,6 +402,8 @@ class JobFilter:
 
             if reasons:
                 rejected.append(job)
+                if len(self.last_summary["rejected_samples"]) < 10:
+                    self.last_summary["rejected_samples"].append(self.diagnostic_sample(job, reasons))
                 for reason in reasons:
                     rejection_counter[reason] += 1
                 continue
