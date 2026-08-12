@@ -10,7 +10,6 @@ class GreenhouseProvider(BaseProvider):
     BOARDS = [
         ("Canonical", "https://boards-api.greenhouse.io/v1/boards/canonical/jobs"),
         ("Samsara", "https://boards-api.greenhouse.io/v1/boards/samsara/jobs"),
-        ("Flock Safety", "https://boards-api.greenhouse.io/v1/boards/flocksafety/jobs"),
     ]
 
     def search(self):

@@ -18,46 +18,48 @@ def main():
     app_logger.info("Starting AI Embedded Job Automation...")
     console.rule("[bold cyan]AI Embedded Job Automation[/bold cyan]")
 
-    # Initialize Database
     database.initialize()
 
-    # Create Search Manager
     manager = SearchManager()
     job_filter = JobFilter()
 
-    # Register Providers
     manager.register_provider(RemoteOKProvider())
     manager.register_provider(GreenhouseProvider())
 
-    # Search Jobs
     app_logger.info("Beginning job search cycle...")
     jobs = manager.search()
 
-    # Apply Filter and Scoring
     app_logger.info("Applying filters and calculating match scores...")
-    jobs = job_filter.filter_jobs(jobs)
+    accepted_jobs = job_filter.filter_jobs(jobs)
+    summary = getattr(job_filter, "last_summary", {})
 
-    # Save Jobs into Database
-    app_logger.info(f"Saving {len(jobs)} filtered jobs to database...")
-    for job in jobs:
+    app_logger.info(f"Saving {len(accepted_jobs)} filtered jobs to database...")
+    for job in accepted_jobs:
         database.save_job(job)
 
-    # Application Information
     console.print(f"[green]Application :[/green] {settings.APP_NAME}")
     console.print(f"[green]Version     :[/green] {settings.VERSION}")
     console.print(f"[green]Database    :[/green] {settings.DATABASE_NAME}")
-    console.print(
-        f"[green]Interval    :[/green] {settings.SEARCH_INTERVAL_MINUTES} minutes"
-    )
+    console.print(f"[green]Interval    :[/green] {settings.SEARCH_INTERVAL_MINUTES} minutes")
 
-    # Show Total Jobs
-    console.print(f"\n[bold yellow]Filtered Jobs Found : {len(jobs)}[/bold yellow]")
+    console.print("\n[bold]Provider Retrieval Summary[/bold]")
+    for provider_name, count in manager.provider_results.items():
+        console.print(f"- {provider_name}: {count} jobs")
+    console.print(f"Total normalized jobs: {summary.get('normalized_jobs', 0)}")
+    console.print(f"Total duplicates removed: {summary.get('duplicates_removed', 0)}")
+    console.print(f"Total jobs accepted: {summary.get('accepted', len(accepted_jobs))}")
+    console.print(f"Total jobs rejected: {summary.get('rejected', 0)}")
 
-    # Display Jobs
-    for index, job in enumerate(jobs, start=1):
+    rejection_counts = summary.get("rejection_counts", {})
+    if rejection_counts:
+        console.print("\n[bold]Top Rejection Reasons[/bold]")
+        for reason, count in list(rejection_counts.items())[:10]:
+            console.print(f"- {reason}: {count}")
 
-        console.rule(f"[cyan]Job {index}[/cyan]")
+    console.print(f"\n[bold yellow]Filtered Jobs Found : {len(accepted_jobs)}[/bold yellow]")
 
+    for index, job in enumerate(accepted_jobs[:10], start=1):
+        console.rule(f"[cyan]Accepted Job {index}[/cyan]")
         console.print(f"[bold]{job.title}[/bold]")
         console.print(f"Company      : {job.company}")
         console.print(f"Location     : {job.location}")

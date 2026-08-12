@@ -9,6 +9,18 @@ class Settings(BaseSettings):
     DATABASE_NAME: str = "jobs.db"
 
     SEARCH_INTERVAL_MINUTES: int = 15
+    ENABLE_LOCATION_FILTER: bool = True
+    LOCATION_KEYWORDS: list[str] = [
+        "hyderabad",
+        "bangalore",
+        "bengaluru",
+        "chennai",
+        "pune",
+        "visakhapatnam",
+        "vizag",
+        "remote",
+        "india",
+    ]
 
     model_config = SettingsConfigDict(
         env_file=".env",

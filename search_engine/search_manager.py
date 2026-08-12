@@ -10,6 +10,8 @@ class SearchManager:
 
     def __init__(self):
         self.providers = []
+        self.provider_results = {}
+        self.total_jobs_retrieved = 0
 
     def register_provider(self, provider):
         app_logger.debug(f"Registering provider: {provider.__class__.__name__}")
@@ -43,6 +45,7 @@ class SearchManager:
     def search(self) -> List[Job]:
 
         jobs = []
+        self.provider_results = {}
 
         for provider in self.providers:
 
@@ -52,14 +55,20 @@ class SearchManager:
 
                 if not isinstance(provider_jobs, list):
                     app_logger.warning(f"{provider.__class__.__name__} returned an invalid payload.")
+                    self.provider_results[provider.__class__.__name__] = 0
                     continue
 
+                self.provider_results[provider.__class__.__name__] = len(provider_jobs)
                 app_logger.info(f"{provider.__class__.__name__} found {len(provider_jobs)} jobs.")
                 jobs.extend(provider_jobs)
 
             except (httpx.HTTPError, TimeoutError, ValueError, TypeError) as exc:
+                self.provider_results[provider.__class__.__name__] = 0
                 app_logger.error(f"{provider.__class__.__name__} failed: {exc}")
             except Exception as exc:
+                self.provider_results[provider.__class__.__name__] = 0
                 app_logger.error(f"{provider.__class__.__name__} failed unexpectedly: {exc}")
 
-        return self._deduplicate_jobs(jobs)
+        self.total_jobs_retrieved = len(jobs)
+        deduped_jobs = self._deduplicate_jobs(jobs)
+        return deduped_jobs
