@@ -9,6 +9,10 @@ class Settings(BaseSettings):
     DATABASE_NAME: str = "jobs.db"
 
     SEARCH_INTERVAL_MINUTES: int = 15
+    PROVIDER_TIMEOUT_SECONDS: float = 20.0
+    PROVIDER_MAX_RETRIES: int = 3
+    PROVIDER_BASE_DELAY_SECONDS: float = 1.0
+    PROVIDER_MAX_DELAY_SECONDS: float = 30.0
     ENABLE_LOCATION_FILTER: bool = True
     LOCATION_KEYWORDS: list[str] = [
         "hyderabad",

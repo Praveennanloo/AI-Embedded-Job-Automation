@@ -248,3 +248,71 @@ def test_filtering_produces_explainable_rejection_reasons():
     assert filtered == []
     assert job.rejection_reasons
     assert any("embedded" in reason.lower() or "entry-level" in reason.lower() for reason in job.rejection_reasons)
+
+
+def test_scheduler_uses_configured_interval_minutes():
+    from app import JobSearchScheduler
+
+    scheduler = JobSearchScheduler(interval_minutes=2)
+
+    assert scheduler.interval_minutes == 2
+    assert scheduler.interval_seconds == 120
+
+
+def test_scheduler_runs_multiple_cycles_successfully(monkeypatch):
+    import app
+
+    calls = []
+
+    def fake_cycle():
+        calls.append("cycle")
+        return [], {}, None
+
+    monkeypatch.setattr(app, "execute_search_cycle", fake_cycle)
+    scheduler = app.JobSearchScheduler(interval_minutes=0, sleep_fn=lambda seconds: None)
+
+    completed_cycles = scheduler.run(cycle_limit=2)
+
+    assert completed_cycles == 2
+    assert len(calls) == 2
+
+
+def test_scheduler_recovers_after_cycle_failure(monkeypatch):
+    import app
+
+    calls = []
+
+    def fake_cycle():
+        calls.append("cycle")
+        if len(calls) == 1:
+            raise RuntimeError("temporary provider outage")
+        return [], {}, None
+
+    monkeypatch.setattr(app, "execute_search_cycle", fake_cycle)
+    scheduler = app.JobSearchScheduler(interval_minutes=0, sleep_fn=lambda seconds: None)
+
+    completed_cycles = scheduler.run(cycle_limit=2)
+
+    assert completed_cycles == 2
+    assert len(calls) == 2
+
+
+def test_scheduler_graceful_shutdown_stops_cleanly(monkeypatch):
+    import threading
+    import app
+
+    calls = []
+
+    def fake_cycle():
+        calls.append("cycle")
+        return [], {}, None
+
+    stop_event = threading.Event()
+    stop_event.set()
+    monkeypatch.setattr(app, "execute_search_cycle", fake_cycle)
+    scheduler = app.JobSearchScheduler(interval_minutes=1, sleep_fn=lambda seconds: None, stop_event=stop_event)
+
+    completed_cycles = scheduler.run(cycle_limit=10)
+
+    assert completed_cycles == 0
+    assert calls == []
