@@ -1,165 +1,182 @@
-import signal
-import threading
+import os
 import time
-
-from rich.console import Console
-
-from config.settings import settings
-from database_engine.database import database
-from utils.logger import app_logger
+import logging
+import threading
+from typing import List, Optional
+from fastapi import FastAPI, Query, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from search_engine.search_manager import SearchManager
 from ai_engine.job_filter import JobFilter
+from database_engine.database import Database
+from resume_engine.ats_optimizer import ATSOptimizer
+from resume_engine.latex_generator import LatexResumeGenerator
 
-from search_engine.providers.remoteok_provider import RemoteOKProvider
-from search_engine.providers.greenhouse_provider import GreenhouseProvider
+# Safe settings import handling
+try:
+    from config import settings
+    SEARCH_INTERVAL = getattr(settings, "SEARCH_INTERVAL_MINUTES", 60)
+except ImportError:
+    SEARCH_INTERVAL = 60
 
-console = Console()
+logger = logging.getLogger(__name__)
+
+app = FastAPI(
+    title="AI Embedded Job Automation API",
+    description="Backend service for fetching, filtering, and optimizing embedded systems job applications.",
+    version="1.0.0"
+)
+
+# Enable CORS for frontend integration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Initialize engines
+search_manager = SearchManager()
+job_filter = JobFilter()
+db_engine = Database()
 
 
-def execute_search_cycle():
-    database.initialize()
+class ResumeRequest(BaseModel):
+    name: str = "Praveen Bolla"
+    email: str = "praveen@example.com"
+    phone: str = "+91 9876543210"
+    github: str = "https://github.com/Praveennanloo"
+    linkedin: str = "https://linkedin.com/in/praveen-bolla"
+    job_title: str
+    company: str
+    job_description: str
+    user_skills: List[str] = [
+        "Embedded C", "C++", "RTOS", "FreeRTOS", "ARM Cortex-M",
+        "STM32", "UART", "SPI", "I2C", "Git"
+    ]
 
-    manager = SearchManager()
-    job_filter = JobFilter()
 
-    manager.register_provider(RemoteOKProvider())
-    manager.register_provider(GreenhouseProvider())
-
-    app_logger.info("Beginning job search cycle...")
-    jobs = manager.search()
-
-    app_logger.info("Applying filters and calculating match scores...")
-    accepted_jobs = job_filter.filter_jobs(jobs)
-    summary = getattr(job_filter, "last_summary", {})
-
-    app_logger.info(f"Saving {len(accepted_jobs)} filtered jobs to database...")
-    for job in accepted_jobs:
-        database.save_job(job)
-
-    console.print(f"[green]Application :[/green] {settings.APP_NAME}")
-    console.print(f"[green]Version     :[/green] {settings.VERSION}")
-    console.print(f"[green]Database    :[/green] {settings.DATABASE_NAME}")
-    console.print(f"[green]Interval    :[/green] {settings.SEARCH_INTERVAL_MINUTES} minutes")
-
-    console.print("\n[bold]Provider Retrieval Summary[/bold]")
-    for provider_name, count in manager.provider_results.items():
-        console.print(f"- {provider_name}: {count} jobs")
-    console.print(f"Total normalized jobs: {summary.get('normalized_jobs', 0)}")
-    console.print(f"Total duplicates removed: {summary.get('duplicates_removed', 0)}")
-    console.print(f"Total jobs accepted: {summary.get('accepted', len(accepted_jobs))}")
-    console.print(f"Total jobs rejected: {summary.get('rejected', 0)}")
-
-    rejection_counts = summary.get("rejection_counts", {})
-    if rejection_counts:
-        console.print("\n[bold]Top Rejection Reasons[/bold]")
-        for reason, count in list(rejection_counts.items())[:10]:
-            console.print(f"- {reason}: {count}")
-
-    rejected_samples = summary.get("rejected_samples", [])
-    if rejected_samples:
-        console.print("\n[bold]Representative Rejected Job Samples[/bold]")
-        for sample in rejected_samples[:5]:
-            console.print(f"- Title: {sample['title']} | Company: {sample['company']} | Location: {sample['location']} | Source: {sample['source']}")
-            console.print(f"  Description Available: {sample['description_available']} | Skills Available: {sample['skills_available']} | Experience: {sample['experience']}")
-            console.print(f"  Embedded matches: {sample['embedded_keyword_matches']}")
-            console.print(f"  Entry-level matches: {sample['entry_level_keyword_matches']}")
-            console.print(f"  Location matches: {sample['location_matches']}")
-            console.print(f"  Rejection reasons: {sample['rejection_reasons']}")
-
-    console.print(f"\n[bold yellow]Filtered Jobs Found : {len(accepted_jobs)}[/bold yellow]")
-
-    for index, job in enumerate(accepted_jobs[:10], start=1):
-        console.rule(f"[cyan]Accepted Job {index}[/cyan]")
-        console.print(f"[bold]{job.title}[/bold]")
-        console.print(f"Company      : {job.company}")
-        console.print(f"Location     : {job.location}")
-        console.print(f"Experience   : {job.experience}")
-        console.print(f"Source       : {job.source}")
-        console.print(f"Match Score  : [bold green]{job.match_score}%[/bold green]")
-        console.print(f"Posted Date  : {job.posted_date}")
-
-        if job.skills:
-            console.print(f"Skills       : {', '.join(job.skills)}")
-        else:
-            console.print("Skills       : Not Available")
-
-        console.print(f"URL          : {job.url}")
-
-    app_logger.info("Job search cycle completed successfully.")
-    console.print("\n[bold green]System Ready ✓[/bold green]")
-    return accepted_jobs, summary, manager
+def execute_search_cycle(query: str = "Embedded Firmware Engineer", limit: int = 20):
+    """Executes a single job search, filtering, and persistence cycle."""
+    try:
+        raw_jobs = search_manager.fetch_all_jobs(query=query, limit=limit)
+        filtered_jobs = job_filter.filter_jobs(raw_jobs)
+        
+        saved_count = 0
+        if hasattr(db_engine, "save_jobs"):
+            saved_count = db_engine.save_jobs(filtered_jobs)
+            
+        logger.info(f"Search cycle complete. Fetched: {len(raw_jobs)}, Filtered: {len(filtered_jobs)}, Saved: {saved_count}")
+        return filtered_jobs, {"raw": len(raw_jobs), "filtered": len(filtered_jobs)}, None
+    except Exception as e:
+        logger.error(f"Error executing search cycle: {e}")
+        raise e
 
 
 class JobSearchScheduler:
-    def __init__(self, interval_minutes=None, sleep_fn=time.sleep, stop_event=None):
-        self.interval_minutes = settings.SEARCH_INTERVAL_MINUTES if interval_minutes is None else interval_minutes
-        self.interval_seconds = max(int(self.interval_minutes) * 60, 0)
-        self.sleep_fn = sleep_fn
+    """Background scheduler service for periodic job automation cycles."""
+    def __init__(self, interval_minutes: int = None, sleep_fn=None, stop_event=None, **kwargs):
+        self.interval_minutes = interval_minutes if interval_minutes is not None else SEARCH_INTERVAL
+        self.interval_seconds = self.interval_minutes * 60
+        self.sleep_fn = sleep_fn or time.sleep
         self.stop_event = stop_event or threading.Event()
-        self._shutdown_requested = False
+        self.thread = None
 
-    def request_shutdown(self):
-        self._shutdown_requested = True
-        self.stop_event.set()
-        app_logger.info("Scheduler shutdown requested.")
-
-    def _should_stop(self):
-        return self._shutdown_requested or self.stop_event.is_set()
-
-    def run(self, cycle_limit=None):
-        cycle_count = 0
-
-        while True:
-            if self._should_stop():
-                app_logger.info("Scheduler stopped before starting next cycle.")
+    def run(self, cycle_limit: Optional[int] = None) -> int:
+        completed_cycles = 0
+        while not self.stop_event.is_set():
+            if cycle_limit is not None and completed_cycles >= cycle_limit:
                 break
-
-            cycle_count += 1
-            app_logger.info(f"Cycle {cycle_count} started. Next run in {self.interval_minutes} minute(s).")
+            
             try:
                 execute_search_cycle()
-                app_logger.info(f"Cycle {cycle_count} completed successfully.")
-            except Exception as exc:
-                app_logger.exception(f"Cycle {cycle_count} failed: {exc}")
+            except Exception as e:
+                logger.error(f"Scheduler cycle failed: {e}")
+            
+            completed_cycles += 1
 
-            if cycle_limit is not None and cycle_count >= cycle_limit:
-                app_logger.info(f"Cycle limit reached ({cycle_limit}). Stopping scheduler.")
+            if cycle_limit is not None and completed_cycles >= cycle_limit:
                 break
 
-            if self._should_stop():
-                app_logger.info("Scheduler stop requested after cycle completion.")
+            if self.stop_event.is_set():
                 break
 
-            next_run_at = time.time() + self.interval_seconds
-            app_logger.info(f"Cycle {cycle_count} complete. Next scheduled run at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(next_run_at))}.")
             self.sleep_fn(self.interval_seconds)
 
-        return cycle_count if cycle_limit is not None else cycle_count
+        return completed_cycles
+
+    def start(self):
+        if self.thread and self.thread.is_alive():
+            return
+        self.stop_event.clear()
+        self.thread = threading.Thread(target=self.run, daemon=True)
+        self.thread.start()
+
+    def stop(self):
+        self.stop_event.set()
+        if self.thread:
+            self.thread.join(timeout=2)
 
 
-def main():
-    app_logger.info("Starting AI Embedded Job Automation...")
-    console.rule("[bold cyan]AI Embedded Job Automation[/bold cyan]")
+@app.get("/")
+def read_root():
+    return {
+        "status": "online",
+        "system": "AI Embedded Job Automation Engine",
+        "version": "1.0.0"
+    }
 
-    scheduler = JobSearchScheduler()
 
-    def handle_signal(signum, frame):
-        app_logger.info(f"Received termination signal {signum}. Shutting down scheduler.")
-        scheduler.request_shutdown()
-
-    signal.signal(signal.SIGINT, handle_signal)
-    signal.signal(signal.SIGTERM, handle_signal)
-
+@app.get("/api/jobs")
+def get_jobs(
+    search_query: str = Query("Embedded Firmware Engineer", alias="query"),
+    limit: int = Query(20, ge=1, le=100)
+):
     try:
-        scheduler.run()
-    except KeyboardInterrupt:
-        app_logger.info("Keyboard interrupt received. Shutting down scheduler.")
-        scheduler.request_shutdown()
+        filtered_jobs, _, _ = execute_search_cycle(query=search_query, limit=limit)
+        results = []
+        for j in filtered_jobs:
+            job_dict = j.to_dict() if hasattr(j, "to_dict") else dict(j)
+            results.append(job_dict)
+            
+        return {
+            "status": "success",
+            "total_found": len(results),
+            "jobs": results
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-    app_logger.info("Service shutdown complete.")
-    console.print("\n[bold green]Scheduler shutdown complete ✓[/bold green]")
 
+@app.post("/api/generate-resume")
+def generate_tailored_resume(req: ResumeRequest):
+    try:
+        optimizer = ATSOptimizer()
+        jd_keywords = optimizer.extract_keywords(req.job_description)
+        ats_result = optimizer.calculate_ats_match(req.user_skills, jd_keywords)
 
-if __name__ == "__main__":
-    main()
+        generator = LatexResumeGenerator(
+            name=req.name,
+            email=req.email,
+            phone=req.phone,
+            github=req.github,
+            linkedin=req.linkedin
+        )
+
+        latex_code = generator.generate_latex(
+            matched_skills=ats_result["matched_keywords"],
+            job_title=req.job_title,
+            company=req.company
+        )
+
+        return {
+            "status": "success",
+            "ats_score": ats_result["match_score"],
+            "matched_keywords": ats_result["matched_keywords"],
+            "missing_keywords": ats_result["missing_keywords"],
+            "latex_code": latex_code
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
