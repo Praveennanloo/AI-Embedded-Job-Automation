@@ -430,30 +430,39 @@ class JobFilter:
         job.match_breakdown = breakdown
         job.match_score = score
         return score
-
     def explain_rejection(self, job: Job) -> List[str]:
         reasons = []
 
         if not self.normalize_text(job.title):
             reasons.append("Missing job title")
+
         if not self.normalize_text(job.company):
             reasons.append("Missing company name")
+
         if not self.normalize_url(job.url):
             reasons.append("Missing or invalid URL")
 
         text = self._job_text(job).lower()
+
         if not self.document_matches_target(job):
             if self._is_generic_unrelated_role(text):
-                reasons.append("Role appears unrelated to embedded/Linux hardware work")
+                reasons.append(
+                    "Role appears unrelated to embedded/Linux hardware work"
+                )
             else:
-                reasons.append("No strong embedded or hardware-relevant Linux context")
-        if not self.is_entry_level_or_intern(job):
-            reasons.append("No fresher/graduate/trainee/intern/junior/entry-level indicator")
+                reasons.append(
+                    "No strong embedded or hardware-relevant Linux context"
+                )
+
+        if settings.REQUIRE_ENTRY_LEVEL and not self.is_entry_level_or_intern(job):
+            reasons.append(
+                "No fresher/graduate/trainee/intern/junior/entry-level indicator"
+            )
+
         if not self.location_allowed(job):
             reasons.append("Location outside configured allowed keywords")
 
         return reasons
-
     def diagnostic_sample(self, job: Job, reasons: List[str]) -> dict:
         text = self._job_text(job).lower()
         return {

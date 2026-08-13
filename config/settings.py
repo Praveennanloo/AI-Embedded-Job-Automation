@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     PROVIDER_BASE_DELAY_SECONDS: float = 1.0
     PROVIDER_MAX_DELAY_SECONDS: float = 30.0
     ENABLE_LOCATION_FILTER: bool = True
+    REQUIRE_ENTRY_LEVEL: bool = True
     LOCATION_KEYWORDS: list[str] = [
         "hyderabad",
         "bangalore",
