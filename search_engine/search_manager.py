@@ -70,5 +70,7 @@ class SearchManager:
                 app_logger.error(f"{provider.__class__.__name__} failed unexpectedly: {exc}")
 
         self.total_jobs_retrieved = len(jobs)
-        deduped_jobs = self._deduplicate_jobs(jobs)
-        return deduped_jobs
+        # SearchManager keeps a defensive provider-level dedupe for duplicate job payloads
+        # returned by the same or multiple providers. The canonical, normalized dedupe is
+        # still owned by JobFilter after URL/title/company normalization.
+        return self._deduplicate_jobs(jobs)

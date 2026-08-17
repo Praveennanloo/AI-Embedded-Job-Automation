@@ -17,6 +17,33 @@ class GreenhouseProvider(BaseProvider):
     ]
 
     @staticmethod
+    def _coalesce(*values):
+        for value in values:
+            if value is None:
+                continue
+            if isinstance(value, str):
+                cleaned = value.strip()
+                if cleaned:
+                    return cleaned
+            elif isinstance(value, (int, float)):
+                return str(value)
+            else:
+                cleaned = str(value).strip()
+                if cleaned:
+                    return cleaned
+        return ""
+
+    @staticmethod
+    def _safe_list(value):
+        if not value:
+            return []
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        if isinstance(value, str):
+            return [part.strip() for part in value.split(",") if part.strip()]
+        return [str(value).strip()]
+
+    @staticmethod
     def _backoff_delay(attempt: int) -> float:
         base_delay = min(
             settings.PROVIDER_BASE_DELAY_SECONDS * (2 ** max(attempt - 1, 0)),
@@ -108,21 +135,47 @@ class GreenhouseProvider(BaseProvider):
                 if not title:
                     continue
 
-                location = item.get("location", {}).get("name") or "Remote"
-                url_value = item.get("absolute_url") or item.get("url") or ""
+                location = (item.get("location") or {}).get("name") or "Remote"
+                url_value = self._coalesce(item.get("absolute_url"), item.get("url"), "")
                 if not url_value:
                     continue
+
+                description = self._coalesce(
+                    item.get("description"),
+                    item.get("content"),
+                    item.get("job_description"),
+                    "",
+                )
+                salary = self._coalesce(
+                    item.get("salary"),
+                    item.get("salary_range"),
+                    item.get("compensation"),
+                    "",
+                )
+                job_type = self._coalesce(item.get("job_type"), item.get("type"), "")
+                employment_type = self._coalesce(item.get("employment_type"), item.get("employment"), "")
+                application_url = self._coalesce(item.get("application_url"), url_value, "")
+                source_job_id = self._coalesce(item.get("id"), item.get("source_job_id"), item.get("job_id"), "")
+                remote = bool(item.get("remote")) or "remote" in str(location).lower()
+                skills = self._safe_list(item.get("tags"))
 
                 jobs.append(
                     Job(
                         title=title,
                         company=company_name,
                         location=location,
-                        experience="Not Specified",
+                        experience=self._coalesce(item.get("experience"), "Not Specified"),
                         source="Greenhouse",
                         url=url_value,
-                        skills=[],
-                        posted_date=item.get("updated_at") or "",
+                        skills=skills,
+                        posted_date=self._coalesce(item.get("updated_at"), item.get("posted_date"), ""),
+                        source_job_id=source_job_id,
+                        remote=remote,
+                        description=description,
+                        salary=salary,
+                        job_type=job_type,
+                        employment_type=employment_type,
+                        application_url=application_url,
                     )
                 )
                 count += 1

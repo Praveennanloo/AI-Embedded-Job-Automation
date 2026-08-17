@@ -13,6 +13,14 @@ class Job:
     url: str
     skills: List[str]
     posted_date: str
+    source_job_id: str = ""
+    remote: bool = False
+    description: str = ""
+    salary: str = ""
+    job_type: str = ""
+    employment_type: str = ""
+    application_url: str = ""
+    score: int = 0
     status: str = "NEW"
     match_score: int = 0
     rejection_reasons: List[str] = field(default_factory=list)

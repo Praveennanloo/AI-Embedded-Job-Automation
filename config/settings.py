@@ -27,6 +27,14 @@ class Settings(BaseSettings):
         "india",
     ]
 
+    AI_ENABLED: bool = False
+    AI_PROVIDER: str = "openai"
+    AI_TIMEOUT_SECONDS: float = 10.0
+    AI_MAX_RETRIES: int = 2
+    OPENAI_API_KEY: str = ""
+    OPENAI_API_BASE_URL: str = "https://api.openai.com/v1"
+    OPENAI_DEFAULT_MODEL: str = "gpt-4o-mini"
+
     model_config = SettingsConfigDict(
         env_file=".env",
         extra="ignore"

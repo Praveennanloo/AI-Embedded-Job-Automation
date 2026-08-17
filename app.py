@@ -6,9 +6,11 @@ from typing import List, Optional
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from dataclasses import asdict
 
 from search_engine.search_manager import SearchManager
 from ai_engine.job_filter import JobFilter
+from application_engine.pipeline_manager import PipelineManager
 from database_engine.database import Database
 from resume_engine.ats_optimizer import ATSOptimizer
 from resume_engine.latex_generator import LatexResumeGenerator
@@ -39,8 +41,47 @@ app.add_middleware(
 
 # Initialize engines
 search_manager = SearchManager()
+def _register_providers_once(manager: SearchManager):
+    """Register production providers in a controlled way, avoiding duplicates."""
+    existing = {p.__class__.__name__ for p in manager.providers}
+
+    # Register RemoteOKProvider if not already present. Import lazily so a
+    # missing dependency or import-time error won't crash the app on startup.
+    if "RemoteOKProvider" not in existing:
+        try:
+            from search_engine.providers.remoteok_provider import RemoteOKProvider
+
+            try:
+                manager.register_provider(RemoteOKProvider())
+            except Exception as exc:
+                logger.error(f"Failed to initialize RemoteOKProvider: {exc}")
+        except ImportError as imp_exc:
+            logger.error(f"RemoteOKProvider import failed: {imp_exc}")
+        except Exception as exc:
+            logger.error(f"Unexpected error importing RemoteOKProvider: {exc}")
+
+    # Register GreenhouseProvider if not already present. Import lazily.
+    if "GreenhouseProvider" not in existing:
+        try:
+            from search_engine.providers.greenhouse_provider import GreenhouseProvider
+
+            try:
+                manager.register_provider(GreenhouseProvider())
+            except Exception as exc:
+                logger.error(f"Failed to initialize GreenhouseProvider: {exc}")
+        except ImportError as imp_exc:
+            logger.error(f"GreenhouseProvider import failed: {imp_exc}")
+        except Exception as exc:
+            logger.error(f"Unexpected error importing GreenhouseProvider: {exc}")
+
+
+# Perform registration at module import time in a controlled way
+_register_providers_once(search_manager)
 job_filter = JobFilter()
 db_engine = Database()
+
+# Create pipeline manager after database engine is available
+pipeline_manager = PipelineManager(db=db_engine)
 
 
 class ResumeRequest(BaseModel):
@@ -59,20 +100,35 @@ class ResumeRequest(BaseModel):
 
 
 def execute_search_cycle(query: str = "Embedded Firmware Engineer", limit: int = 20):
-    """Executes a single job search, filtering, and persistence cycle."""
+    """Executes a single job search, filtering, and persistence cycle.
+
+    Uses SearchManager.search() to aggregate provider results, then applies
+    a simple `limit` slice before filtering and persistence.
+    """
     try:
-        raw_jobs = search_manager.fetch_all_jobs(query=query, limit=limit)
-        filtered_jobs = job_filter.filter_jobs(raw_jobs)
-        
-        saved_count = 0
-        if hasattr(db_engine, "save_jobs"):
-            saved_count = db_engine.save_jobs(filtered_jobs)
-            
-        logger.info(f"Search cycle complete. Fetched: {len(raw_jobs)}, Filtered: {len(filtered_jobs)}, Saved: {saved_count}")
-        return filtered_jobs, {"raw": len(raw_jobs), "filtered": len(filtered_jobs)}, None
+        # Use a PipelineManager instance tied to the current db_engine to execute the full pipeline
+        pm = PipelineManager(db=db_engine)
+        # Ensure PipelineManager uses the application's SearchManager (allows tests to monkeypatch app.search_manager)
+        pm.search_manager = search_manager
+        result = pm.run_pipeline(limit=limit, shortlist_size=limit)
+        # PipelineManager persists shortlisted jobs; return accepted list for API
+        # For backward compatibility, return the shortlisted Job objects if available
+        shortlisted = []
+        try:
+            # The pipeline returns counts and prepared applications; reconstruct list
+            # from the prepared_applications payload where possible.
+            for item in result.get("prepared_applications", []):
+                job_info = item.get("job")
+                # Create lightweight Job-like dict for response
+                shortlisted.append(job_info)
+        except Exception:
+            pass
+
+        logger.info(f"Pipeline run complete. Found: {result.get('total_found')}, Shortlisted: {result.get('shortlisted_count')}")
+        return shortlisted, {"raw": result.get("total_found"), "filtered": result.get("accepted_count")}, None
     except Exception as e:
         logger.error(f"Error executing search cycle: {e}")
-        raise e
+        raise
 
 
 class JobSearchScheduler:
@@ -138,7 +194,11 @@ def get_jobs(
         filtered_jobs, _, _ = execute_search_cycle(query=search_query, limit=limit)
         results = []
         for j in filtered_jobs:
-            job_dict = j.to_dict() if hasattr(j, "to_dict") else dict(j)
+            # Prefer an explicit to_dict() if provided, otherwise use dataclasses.asdict
+            if hasattr(j, "to_dict") and callable(getattr(j, "to_dict")):
+                job_dict = j.to_dict()
+            else:
+                job_dict = asdict(j)
             results.append(job_dict)
             
         return {

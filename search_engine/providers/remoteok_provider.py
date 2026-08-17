@@ -14,6 +14,41 @@ class RemoteOKProvider(BaseProvider):
     API_URL = "https://remoteok.com/api"
 
     @staticmethod
+    def _clean_text(value):
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value.strip()
+        return str(value).strip()
+
+    @staticmethod
+    def _coalesce(*values):
+        for value in values:
+            if value is None:
+                continue
+            if isinstance(value, str):
+                cleaned = value.strip()
+                if cleaned:
+                    return cleaned
+            elif isinstance(value, (int, float)):
+                return str(value)
+            else:
+                cleaned = str(value).strip()
+                if cleaned:
+                    return cleaned
+        return ""
+
+    @staticmethod
+    def _safe_list(value):
+        if not value:
+            return []
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        if isinstance(value, str):
+            return [part.strip() for part in value.split(",") if part.strip()]
+        return [str(value).strip()]
+
+    @staticmethod
     def _backoff_delay(attempt: int) -> float:
         base_delay = min(
             settings.PROVIDER_BASE_DELAY_SECONDS * (2 ** max(attempt - 1, 0)),
@@ -97,26 +132,40 @@ class RemoteOKProvider(BaseProvider):
                 if not isinstance(item, dict):
                     continue
 
-                title = item.get("position") or item.get("title")
+                title = self._coalesce(item.get("position"), item.get("title"))
                 if not title:
                     continue
 
-                company = item.get("company", "Unknown")
-                location = item.get("location", "Remote")
-                url = item.get("url", "")
-                tags = item.get("tags", [])
-                date = item.get("date", "")
+                company = self._coalesce(item.get("company"), "Unknown")
+                location = self._coalesce(item.get("location"), "Remote")
+                url = self._coalesce(item.get("url"), item.get("application_url"), "")
+                tags = self._safe_list(item.get("tags"))
+                date = self._coalesce(item.get("date"), item.get("posted_date"), "")
+                description = self._coalesce(item.get("description"), item.get("content"), item.get("snippet"), "")
+                salary = self._coalesce(item.get("salary"), item.get("salary_range"), item.get("compensation"), "")
+                job_type = self._coalesce(item.get("job_type"), item.get("type"), "")
+                employment_type = self._coalesce(item.get("employment_type"), item.get("employment"), "")
+                application_url = self._coalesce(item.get("application_url"), url, "")
+                source_job_id = self._coalesce(item.get("id"), item.get("source_job_id"), "")
+                remote = bool(item.get("remote")) or "remote" in location.lower()
 
                 jobs.append(
                     Job(
                         title=title,
                         company=company,
                         location=location,
-                        experience="Not Specified",
+                        experience=self._coalesce(item.get("experience"), "Not Specified"),
                         source="RemoteOK",
                         url=url,
                         skills=tags,
                         posted_date=date,
+                        source_job_id=source_job_id,
+                        remote=remote,
+                        description=description,
+                        salary=salary,
+                        job_type=job_type,
+                        employment_type=employment_type,
+                        application_url=application_url,
                     )
                 )
         except (TypeError, ValueError) as exc:
