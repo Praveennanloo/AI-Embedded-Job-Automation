@@ -42,7 +42,7 @@ class SearchManager:
 
         return unique_jobs
 
-    def search(self, query: str = "Embedded Firmware Engineer") -> List[Job]:
+    def search(self) -> List[Job]:
 
         jobs = []
         self.provider_results = {}

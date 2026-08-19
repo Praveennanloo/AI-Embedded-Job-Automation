@@ -33,17 +33,7 @@ class PipelineManager:
         # 1. Collect jobs
         raw_jobs: List[Job] = []
         try:
-            import inspect
-
-            search_method = self.search_manager.search
-            parameters = inspect.signature(search_method).parameters
-
-            if "query" in parameters:
-                raw_jobs = search_method(query=query)
-            else:
-                # Backward compatibility with older SearchManager/test doubles
-                raw_jobs = search_method()
-
+            raw_jobs = self.search_manager.search(query=query)
         except Exception as exc:
             app_logger.error(f"Search failed: {exc}")
 

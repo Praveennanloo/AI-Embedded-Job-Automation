@@ -110,11 +110,7 @@ def execute_search_cycle(query: str = "Embedded Firmware Engineer", limit: int =
         pm = PipelineManager(db=db_engine)
         # Ensure PipelineManager uses the application's SearchManager (allows tests to monkeypatch app.search_manager)
         pm.search_manager = search_manager
-        result = pm.run_pipeline(
-            query=query,
-            limit=limit,
-            shortlist_size=limit
-        )
+        result = pm.run_pipeline(limit=limit, shortlist_size=limit)
         # PipelineManager persists shortlisted jobs; return accepted list for API
         # For backward compatibility, return the shortlisted Job objects if available
         shortlisted = []
