@@ -44,6 +44,22 @@ class GreenhouseProvider(BaseProvider):
         return [str(value).strip()]
 
     @staticmethod
+    def _safe_metadata(value):
+        if isinstance(value, dict):
+            return dict(value)
+        if not isinstance(value, list):
+            return {}
+
+        metadata = {}
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name")
+            if name:
+                metadata[str(name).strip()] = item.get("value")
+        return metadata
+
+    @staticmethod
     def _backoff_delay(attempt: int) -> float:
         base_delay = min(
             settings.PROVIDER_BASE_DELAY_SECONDS * (2 ** max(attempt - 1, 0)),
@@ -60,16 +76,29 @@ class GreenhouseProvider(BaseProvider):
             return f"HTTP {status_code} server error"
         return f"HTTP {status_code}"
 
-    def search(self):
+    def search(
+        self,
+        query: str = "",
+        location: str = "",
+        limit: int | None = None,
+        timeout_seconds: float | None = None,
+        max_retries: int | None = None,
+    ):
 
+        self.last_status = {"status": "failed", "count": 0, "error": None, "boards": {}}
         jobs = []
-        max_attempts = settings.PROVIDER_MAX_RETRIES + 1
+        timeout_seconds = settings.PROVIDER_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+        max_retries = settings.PROVIDER_MAX_RETRIES if max_retries is None else max_retries
+        max_attempts = max_retries + 1
 
         for company_name, url in self.BOARDS:
+            data = None
+            board_status = {"status": "failed", "count": 0, "error": None}
+            content_url = f"{url}&content=true" if "?" in url else f"{url}?content=true"
             for attempt in range(1, max_attempts + 1):
                 try:
                     app_logger.debug(f"Fetching Greenhouse jobs for {company_name}...")
-                    response = httpx.get(url, timeout=settings.PROVIDER_TIMEOUT_SECONDS)
+                    response = httpx.get(content_url, timeout=timeout_seconds)
                     response.raise_for_status()
                     data = response.json()
                     break
@@ -81,9 +110,10 @@ class GreenhouseProvider(BaseProvider):
                         app_logger.error(
                             f"Provider Greenhouse {company_name} final failure: {failure_type}; permanent 4xx error, not retrying."
                         )
+                        board_status["error"] = failure_type
                         break
 
-                    if status in {429, 500, 502, 503, 504} and attempt <= settings.PROVIDER_MAX_RETRIES:
+                    if status in {429, 500, 502, 503, 504} and attempt <= max_retries:
                         delay = self._backoff_delay(attempt)
                         app_logger.warning(
                             f"Provider Greenhouse {company_name} attempt {attempt}/{max_attempts} failed with {failure_type}; retrying in {delay}s."
@@ -94,11 +124,12 @@ class GreenhouseProvider(BaseProvider):
                     app_logger.error(
                         f"Provider Greenhouse {company_name} final failure after {attempt} attempt(s): {failure_type}."
                     )
+                    board_status["error"] = failure_type
                     break
                 except (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError, httpx.ReadTimeout, httpx.WriteTimeout, httpx.ConnectTimeout) as exc:
                     failure_type = exc.__class__.__name__
 
-                    if attempt <= settings.PROVIDER_MAX_RETRIES:
+                    if attempt <= max_retries:
                         delay = self._backoff_delay(attempt)
                         app_logger.warning(
                             f"Provider Greenhouse {company_name} attempt {attempt}/{max_attempts} failed with {failure_type}; retrying in {delay}s."
@@ -109,21 +140,32 @@ class GreenhouseProvider(BaseProvider):
                     app_logger.error(
                         f"Provider Greenhouse {company_name} final failure after {attempt} attempt(s): {failure_type}: {exc}"
                     )
+                    board_status["error"] = f"{failure_type}: {exc}"
                     break
                 except ValueError as exc:
                     app_logger.error(
                         f"Provider Greenhouse {company_name} final failure: invalid JSON payload: {exc}"
                     )
+                    board_status["status"] = "malformed"
+                    board_status["error"] = str(exc)
                     break
                 except Exception as exc:
                     app_logger.error(
                         f"Provider Greenhouse {company_name} final failure after {attempt} attempt(s): unexpected error: {exc}"
                     )
+                    board_status["error"] = str(exc)
                     break
             else:
                 continue
 
-            if "data" not in locals():
+            if data is None:
+                self.last_status["boards"][company_name] = board_status
+                continue
+
+            if not isinstance(data, dict) or not isinstance(data.get("jobs", []), list):
+                board_status["status"] = "malformed"
+                board_status["error"] = "Expected a JSON object with a jobs list"
+                self.last_status["boards"][company_name] = board_status
                 continue
 
             count = 0
@@ -176,11 +218,39 @@ class GreenhouseProvider(BaseProvider):
                         job_type=job_type,
                         employment_type=employment_type,
                         application_url=application_url,
+                        metadata=self._safe_metadata(item.get("metadata")),
                     )
                 )
                 count += 1
 
             app_logger.debug(f"Found {count} matching jobs for {company_name} on Greenhouse.")
+            board_status = {"status": "success", "count": count, "error": None}
+            self.last_status["boards"][company_name] = board_status
             data = None
 
+        # Greenhouse's board endpoint returns a full board feed. Filter its
+        # actual records locally because the API has no generic text query.
+        if self._query_terms(query):
+            matched_jobs = []
+            for job in jobs:
+                query_match = self.query_match_details(job, query)
+                if query_match["matched"]:
+                    job.match_breakdown = {
+                        **getattr(job, "match_breakdown", {}),
+                        "query_match": query_match,
+                    }
+                    matched_jobs.append(job)
+            jobs = matched_jobs
+        jobs = [job for job in jobs if self.location_matches(job, location)]
+        jobs = jobs[:limit] if limit else jobs
+        board_values = list(self.last_status["boards"].values())
+        successes = [item for item in board_values if item["status"] == "success"]
+        failures = [item for item in board_values if item["status"] != "success"]
+        if successes and failures:
+            overall_status = "partial"
+        elif successes:
+            overall_status = "success"
+        else:
+            overall_status = "failed"
+        self.last_status.update({"status": overall_status, "count": len(jobs)})
         return jobs

@@ -194,6 +194,7 @@ def test_real_provider_field_mapping_from_mocked_payloads(monkeypatch):
                 "application_url": "https://greenhouse.example/apply/202",
                 "remote": True,
                 "tags": ["Linux", "C", "Drivers"],
+                "metadata": [{"name": "LinkedIn Posting Level", "value": "Mid-Senior"}],
             }]
         })
 
@@ -213,6 +214,9 @@ def test_real_provider_field_mapping_from_mocked_payloads(monkeypatch):
     assert gh_job.salary == "₹15-18 LPA"
     assert gh_job.application_url == "https://greenhouse.example/apply/202"
     assert gh_job.posted_date == "2026-08-13"
+    assert gh_job.metadata == {"LinkedIn Posting Level": "Mid-Senior"}
+    assert JobFilter().filter_jobs([gh_job]) == []
+    assert gh_job.rejection_reasons
 
 
 def test_deduplication_primary_jobfilter(monkeypatch, tmp_path):

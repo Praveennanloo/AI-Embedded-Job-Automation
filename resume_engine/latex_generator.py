@@ -7,7 +7,18 @@ class LatexResumeGenerator:
         self.linkedin = linkedin
 
     def generate_latex(self, matched_skills: list, job_title: str, company: str) -> str:
-        skills_formatted = ", ".join(matched_skills) if matched_skills else "Embedded C, RTOS, ARM Cortex, Microcontrollers, SPI, I2C, UART"
+        def escape(value) -> str:
+            replacements = {
+                "\\": r"\textbackslash{}", "&": r"\&", "%": r"\%", "$": r"\$",
+                "#": r"\#", "_": r"\_", "{": r"\{", "}": r"\}",
+                "~": r"\textasciitilde{}", "^": r"\textasciicircum{}",
+            }
+            return "".join(replacements.get(char, char) for char in str(value or ""))
+
+        skills_formatted = ", ".join(escape(skill) for skill in matched_skills) if matched_skills else "Embedded C, RTOS, ARM Cortex, Microcontrollers, SPI, I2C, UART"
+        name, email, phone = escape(self.name), escape(self.email), escape(self.phone)
+        github, linkedin = escape(self.github), escape(self.linkedin)
+        job_title, company = escape(job_title), escape(company)
 
         latex_code = f"""\\documentclass[letterpaper,11pt]{{article}}
 \\usepackage{{latexsym}}
@@ -42,10 +53,10 @@ class LatexResumeGenerator:
 \\begin{{document}}
 
 \\begin{{center}}
-    {{\\Huge \\scshape {self.name}}} \\\\ \\vspace{{1pt}}
-    \\small {self.phone} $|$ \\href{{mailto:{self.email}}}{{{self.email}}} $|$ 
-    \\href{{{self.linkedin}}}{{LinkedIn}} $|$
-    \\href{{{self.github}}}{{GitHub}}
+    {{\\Huge \\scshape {name}}} \\\\ \\vspace{{1pt}}
+    \\small {phone} $|$ \\href{{mailto:{email}}}{{{email}}} $|$ 
+    \\href{{{linkedin}}}{{LinkedIn}} $|$
+    \\href{{{github}}}{{GitHub}}
 \\end{{center}}
 
 \\section{{Objective}}

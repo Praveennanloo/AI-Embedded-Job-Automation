@@ -16,17 +16,20 @@ class MockAIProvider(AIProviderInterface):
     def generate(self, request: AIRequest) -> AIResponse:
         if request.task == "job_description_understanding":
             payload = {
+                # Kept at the top level for the original provider contract.
                 "job_role": request.payload.get("job_title") or request.payload.get("title") or "Embedded Engineer",
-                "skills": [
-                    "Embedded C",
-                    "C",
-                    "Linux",
-                    "ARM",
-                    "GPIO",
-                ],
+                "skills": ["Embedded C", "C", "Linux", "ARM", "GPIO"],
                 "missing_skills": [],
                 "experience_fit": "fresher",
                 "location_fit": True,
+                "result": {
+                    "job_role": request.payload.get("job_title") or request.payload.get("title") or "Embedded Engineer",
+                    "skills": ["Embedded C", "C", "Linux", "ARM", "GPIO"],
+                    "missing_skills": [],
+                    "experience_fit": "fresher",
+                    "location_fit": True,
+                },
+                "status": "ok",
             }
         elif request.task == "skill_extraction":
             payload = {

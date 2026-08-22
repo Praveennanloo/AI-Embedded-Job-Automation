@@ -78,10 +78,15 @@ class JobFilter:
         "fresher",
         "graduate",
         "graduate engineer",
+        "graduate trainee",
+        "new graduate",
+        "recent graduate",
         "entry level",
         "entry-level",
         "junior",
         "trainee",
+        "trainee engineer",
+        "associate engineer",
         "internship",
         "intern",
         "internship program",
@@ -89,6 +94,26 @@ class JobFilter:
         "0-2 years",
         "0 year",
         "0-2 year",
+    ]
+
+    SENIORITY_KEYWORDS = [
+        "senior",
+        "staff",
+        "principal",
+        "lead",
+        "manager",
+        "director",
+        "architect",
+        "head",
+        "chief",
+    ]
+
+    NON_TARGET_ROLE_TITLE_PATTERNS = [
+        r"\bsales\b",
+        r"\baccount manager\b",
+        r"\bconsultant\b",
+        r"\bpre[- ]sales\b",
+        r"\bfield engineer\b",
     ]
 
     HARDWARE_CONTEXT_KEYWORDS = [
@@ -280,6 +305,7 @@ class JobFilter:
             job_type=self.normalize_text(getattr(job, "job_type", "")),
             employment_type=self.normalize_employment_type(getattr(job, "employment_type", "")),
             application_url=self.normalize_application_url(getattr(job, "application_url", "")),
+            metadata=dict(getattr(job, "metadata", {}) or {}),
             score=getattr(job, "score", 0),
             status=job.status,
             match_score=job.match_score,
@@ -563,7 +589,10 @@ class JobFilter:
             reasons.append("Location is outside the allowed embedded target area")
 
         if profile_skills and matched_skills:
-            missing = sorted(profile_skills - {skill.lower() for skill in matched_skills})
+            # Missing skills describe job requirements absent from the
+            # candidate, not candidate skills absent from this particular job.
+            required = {skill.lower() for skill in self._job_skill_labels(job)}
+            missing = sorted(required - profile_skills)
             if missing:
                 reasons.append(f"Missing key profile skills: {', '.join(sorted(missing)[:3])}")
 
@@ -835,8 +864,9 @@ class JobFilter:
 
             ranking_score = deterministic_score + role_score + skill_score + embedded_score + location_score + experience_score - missing_penalty
             ai_adjustment = self._compute_ai_adjustment(ai_enrichment)
-            final_score = self._clamp(deterministic_score + ai_adjustment, 0.0, 100.0)
-            display_score = deterministic_score
+            final_score = self._clamp(ranking_score + ai_adjustment, 0.0, 100.0)
+            if analysis["role_category"] == "Unrelated":
+                final_score = min(final_score, 35.0)
 
             reasons = []
             if analysis["role_category"] != "Unrelated":
@@ -863,7 +893,10 @@ class JobFilter:
             ranked.append({
                 "rank": 0,
                 "deterministic_score": deterministic_score,
-                "match_score": ranking_score,
+                # final_score is the sole public candidate ranking score;
+                # deterministic_score remains only as an explanation.
+                "match_score": final_score,
+                "ranking_score_raw": ranking_score,
                 "final_score": final_score,
                 "ai_adjustment": ai_adjustment,
                 "role_match": analysis["role_category"],
@@ -891,7 +924,7 @@ class JobFilter:
         ranked.sort(key=lambda item: (
             1 if item["role_match"] == "Unrelated" else 0,
             0 if item["location_match"] else 1,
-            -item["match_score"],
+            -item["ranking_score_raw"],
             -role_priority.get(item["role_match"], 0),
             item["title"].lower(),
             item["company"].lower(),
@@ -1051,6 +1084,18 @@ class JobFilter:
         if not text:
             return False
 
+        title = self.normalize_text(getattr(job, "title", "")).lower()
+        if any(re.search(rf"\b{re.escape(keyword)}\b", title) for keyword in self.SENIORITY_KEYWORDS):
+            return False
+
+        if any(re.search(pattern, title) for pattern in self.NON_TARGET_ROLE_TITLE_PATTERNS):
+            return False
+
+        metadata = getattr(job, "metadata", {}) or {}
+        posting_level = str(metadata.get("LinkedIn Posting Level", "")).strip().lower()
+        if posting_level == "mid-senior":
+            return False
+
         for keyword in self.ENTRY_LEVEL_KEYWORDS:
             if keyword in text:
                 return True
@@ -1084,6 +1129,7 @@ class JobFilter:
 
         score = 0
         breakdown = {
+            **getattr(job, "match_breakdown", {}),
             "embedded_hits": [],
             "supporting_hits": [],
             "entry_hits": [],

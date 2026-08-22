@@ -4,7 +4,7 @@ from search_engine.providers.base_provider import BaseProvider
 
 class DummyProvider(BaseProvider):
 
-    def search(self):
+    def search(self, query: str = "", location: str = "", limit: int | None = None):
 
         jobs = [
 
@@ -32,5 +32,4 @@ class DummyProvider(BaseProvider):
 
         ]
 
-        return jobs
-
+        return jobs[:limit] if limit else jobs

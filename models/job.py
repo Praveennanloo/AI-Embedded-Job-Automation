@@ -20,6 +20,7 @@ class Job:
     job_type: str = ""
     employment_type: str = ""
     application_url: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)
     score: int = 0
     status: str = "NEW"
     match_score: int = 0

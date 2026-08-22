@@ -310,6 +310,73 @@ def test_rtos_freertos_junior_job_is_accepted():
     assert filtered[0].rejection_reasons == []
 
 
+def test_additional_entry_level_indicators_are_accepted():
+    filterer = JobFilter()
+    indicators = [
+        "Graduate Trainee",
+        "Trainee Engineer",
+        "Associate Engineer",
+        "New Graduate",
+        "Recent Graduate",
+    ]
+
+    jobs = [
+        Job(
+            title=f"Embedded Firmware {indicator}",
+            company="Embedded Systems Co",
+            location="Pune",
+            experience="Not Specified",
+            source="Greenhouse",
+            url=f"https://example.com/{index}",
+            skills=["Firmware", "MCU", "C"],
+            posted_date="2026-08-04",
+            description="Develop embedded firmware for microcontrollers.",
+        )
+        for index, indicator in enumerate(indicators)
+    ]
+
+    filtered = filterer.filter_jobs(jobs)
+
+    assert {job.title for job in filtered} == {
+        f"Embedded Firmware {indicator}" for indicator in indicators
+    }
+
+
+def test_title_seniority_overrides_incidental_entry_level_text():
+    filterer = JobFilter()
+    seniority_terms = [
+        "Senior",
+        "Staff",
+        "Principal",
+        "Lead",
+        "Manager",
+        "Director",
+        "Architect",
+        "Head",
+        "Chief",
+    ]
+
+    jobs = [
+        Job(
+            title=f"{term} Embedded Firmware Engineer",
+            company="Embedded Systems Co",
+            location="Pune",
+            experience="Not Specified",
+            source="Greenhouse",
+            url=f"https://example.com/seniority-{index}",
+            skills=["Firmware", "MCU", "C"],
+            posted_date="2026-08-04",
+            description="Mentors graduates and junior engineers on embedded firmware.",
+        )
+        for index, term in enumerate(seniority_terms)
+    ]
+
+    filtered = filterer.filter_jobs(jobs)
+
+    assert filtered == []
+    assert all(job.rejection_reasons for job in jobs)
+
+
 def test_generic_software_graduate_job_is_rejected():
     filterer = JobFilter()
     job = Job(
@@ -365,6 +432,46 @@ def test_unrelated_junior_job_is_rejected():
 
     assert filtered == []
     assert job.rejection_reasons
+
+
+def test_non_target_customer_facing_roles_are_rejected_even_with_entry_text():
+    filterer = JobFilter()
+    jobs = [
+        Job("Embedded Devices Software Solution Sales - All Roles", "Canonical", "Worldwide", "Graduate", "Greenhouse", "https://example.com/sales", [], ""),
+        Job("Embedded Linux Consultant - Japan", "Canonical", "APAC", "Associate", "Greenhouse", "https://example.com/consultant", [], ""),
+        Job("Embedded Linux Field Engineer for Devices/IoT", "Canonical", "Worldwide", "Associate", "Greenhouse", "https://example.com/field", [], ""),
+    ]
+
+    assert filterer.filter_jobs(jobs) == []
+    assert all(job.rejection_reasons for job in jobs)
+
+
+def test_mid_senior_embedded_role_is_rejected_but_fresher_engineering_roles_pass():
+    filterer = JobFilter()
+    mid_senior = Job(
+        "Linux Devices Software Engineer", "Canonical", "Worldwide", "Not Specified", "Greenhouse",
+        "https://example.com/mid-senior", ["Linux", "Embedded Systems"], "",
+        description="Work on embedded systems across all seniority levels.",
+        metadata={"LinkedIn Posting Level": "Mid-Senior"},
+    )
+    junior = Job(
+        "Junior Ubuntu Software Engineer", "Canonical", "Worldwide", "Entry level", "Greenhouse",
+        "https://example.com/junior", ["Linux"], "",
+        description="We are hiring junior engineers for Ubuntu software, bootloaders, and embedded systems.",
+    )
+    graduate = Job(
+        "Graduate Software Engineer, Open Source and Linux", "Canonical", "Worldwide", "Entry level", "Greenhouse",
+        "https://example.com/graduate", ["Linux"], "",
+        description="We are hiring graduate software engineers for Linux and IoT systems.",
+    )
+
+    accepted = filterer.filter_jobs([mid_senior, junior, graduate])
+
+    assert {job.title for job in accepted} == {
+        "Junior Ubuntu Software Engineer",
+        "Graduate Software Engineer, Open Source And Linux",
+    }
+    assert mid_senior.rejection_reasons
 
 
 def test_missing_or_null_fields_are_handled():

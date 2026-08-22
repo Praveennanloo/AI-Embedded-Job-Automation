@@ -47,10 +47,7 @@ class JobPipeline:
 
     def record_status(self, job: Job, status: str = "prepared") -> None:
         job.status = status
-        try:
-            # persist job in database if available
-            if hasattr(self.db, "save_job"):
-                self.db.save_job(job)
-        except Exception:
-            # Do not raise on persistence errors here; caller should handle
-            pass
+        # Keep persistence errors observable to the pipeline caller. The
+        # caller already isolates individual application-preparation failures.
+        if hasattr(self.db, "save_job") and not self.db.save_job(job):
+            raise RuntimeError(f"Failed to persist job status for {job.url}")

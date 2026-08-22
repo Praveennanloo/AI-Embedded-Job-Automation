@@ -65,18 +65,28 @@ class RemoteOKProvider(BaseProvider):
             return f"HTTP {status_code} server error"
         return f"HTTP {status_code}"
 
-    def search(self):
+    def search(
+        self,
+        query: str = "",
+        location: str = "",
+        limit: int | None = None,
+        timeout_seconds: float | None = None,
+        max_retries: int | None = None,
+    ):
 
+        self.last_status = {"status": "failed", "count": 0, "error": None}
         jobs = []
         headers = {"User-Agent": "Mozilla/5.0"}
-        max_attempts = settings.PROVIDER_MAX_RETRIES + 1
+        timeout_seconds = settings.PROVIDER_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+        max_retries = settings.PROVIDER_MAX_RETRIES if max_retries is None else max_retries
+        max_attempts = max_retries + 1
 
         for attempt in range(1, max_attempts + 1):
             try:
                 response = httpx.get(
                     self.API_URL,
                     headers=headers,
-                    timeout=settings.PROVIDER_TIMEOUT_SECONDS,
+                    timeout=timeout_seconds,
                 )
                 response.raise_for_status()
                 data = response.json()
@@ -89,9 +99,10 @@ class RemoteOKProvider(BaseProvider):
                     app_logger.error(
                         f"Provider RemoteOK final failure: {failure_type}; permanent 4xx error, not retrying."
                     )
+                    self.last_status["error"] = failure_type
                     return []
 
-                if status in {429, 500, 502, 503, 504} and attempt <= settings.PROVIDER_MAX_RETRIES:
+                if status in {429, 500, 502, 503, 504} and attempt <= max_retries:
                     delay = self._backoff_delay(attempt)
                     app_logger.warning(
                         f"Provider RemoteOK attempt {attempt}/{max_attempts} failed with {failure_type}; retrying in {delay}s."
@@ -102,11 +113,12 @@ class RemoteOKProvider(BaseProvider):
                 app_logger.error(
                     f"Provider RemoteOK final failure after {attempt} attempt(s): {failure_type}."
                 )
+                self.last_status["error"] = failure_type
                 return []
             except (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError, httpx.ReadTimeout, httpx.WriteTimeout, httpx.ConnectTimeout) as exc:
                 failure_type = exc.__class__.__name__
 
-                if attempt <= settings.PROVIDER_MAX_RETRIES:
+                if attempt <= max_retries:
                     delay = self._backoff_delay(attempt)
                     app_logger.warning(
                         f"Provider RemoteOK attempt {attempt}/{max_attempts} failed with {failure_type}; retrying in {delay}s."
@@ -117,14 +129,18 @@ class RemoteOKProvider(BaseProvider):
                 app_logger.error(
                     f"Provider RemoteOK final failure after {attempt} attempt(s): {failure_type}: {exc}"
                 )
+                self.last_status["error"] = f"{failure_type}: {exc}"
                 return []
             except ValueError as exc:
                 app_logger.error(f"Provider RemoteOK final failure: invalid JSON payload: {exc}")
+                self.last_status["status"] = "malformed"
+                self.last_status["error"] = str(exc)
                 return []
             except Exception as exc:
                 app_logger.error(
                     f"Provider RemoteOK final failure after {attempt} attempt(s): unexpected error: {exc}"
                 )
+                self.last_status["error"] = str(exc)
                 return []
 
         try:
@@ -170,6 +186,24 @@ class RemoteOKProvider(BaseProvider):
                 )
         except (TypeError, ValueError) as exc:
             app_logger.error(f"Provider RemoteOK failed while parsing results: {exc}")
+            self.last_status["status"] = "malformed"
+            self.last_status["error"] = str(exc)
             return []
 
+        # RemoteOK's public feed has no query parameter. Filter only the real
+        # payload locally, using title/tags/description; do not invent jobs.
+        if self._query_terms(query):
+            matched_jobs = []
+            for job in jobs:
+                query_match = self.query_match_details(job, query)
+                if query_match["matched"]:
+                    job.match_breakdown = {
+                        **getattr(job, "match_breakdown", {}),
+                        "query_match": query_match,
+                    }
+                    matched_jobs.append(job)
+            jobs = matched_jobs
+        jobs = [job for job in jobs if self.location_matches(job, location)]
+        jobs = jobs[:limit] if limit else jobs
+        self.last_status = {"status": "success", "count": len(jobs), "error": None}
         return jobs

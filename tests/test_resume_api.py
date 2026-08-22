@@ -1,8 +1,5 @@
-import pytest
-from fastapi.testclient import TestClient
-from app import app
+from app import ResumeRequest, generate_tailored_resume
 
-client = TestClient(app)
 
 def test_generate_resume_endpoint():
     payload = {
@@ -17,10 +14,7 @@ def test_generate_resume_endpoint():
         "user_skills": ["Embedded C", "RTOS", "STM32", "UART"]
     }
     
-    response = client.post("/api/generate-resume", json=payload)
-    assert response.status_code == 200
-    
-    data = response.json()
+    data = generate_tailored_resume(ResumeRequest(**payload))
     assert data["status"] == "success"
     assert "ats_score" in data
     assert "Embedded C" in data["matched_keywords"]

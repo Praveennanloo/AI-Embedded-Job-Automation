@@ -1,7 +1,7 @@
-import os
 import time
 import logging
 import threading
+from contextlib import asynccontextmanager
 from typing import List, Optional
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,29 +15,11 @@ from database_engine.database import Database
 from resume_engine.ats_optimizer import ATSOptimizer
 from resume_engine.latex_generator import LatexResumeGenerator
 
-# Safe settings import handling
-try:
-    from config import settings
-    SEARCH_INTERVAL = getattr(settings, "SEARCH_INTERVAL_MINUTES", 60)
-except ImportError:
-    SEARCH_INTERVAL = 60
+from config.settings import settings
+
+SEARCH_INTERVAL = settings.SEARCH_INTERVAL_MINUTES
 
 logger = logging.getLogger(__name__)
-
-app = FastAPI(
-    title="AI Embedded Job Automation API",
-    description="Backend service for fetching, filtering, and optimizing embedded systems job applications.",
-    version="1.0.0"
-)
-
-# Enable CORS for frontend integration
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # Initialize engines
 search_manager = SearchManager()
@@ -99,7 +81,13 @@ class ResumeRequest(BaseModel):
     ]
 
 
-def execute_search_cycle(query: str = "Embedded Firmware Engineer", limit: int = 20):
+def execute_search_cycle(
+    query: str = "Embedded Firmware Engineer",
+    location: str = "",
+    limit: int = 20,
+    candidate_profile: Optional[dict] = None,
+    interactive: bool = False,
+):
     """Executes a single job search, filtering, and persistence cycle.
 
     Uses SearchManager.search() to aggregate provider results, then applies
@@ -112,24 +100,18 @@ def execute_search_cycle(query: str = "Embedded Firmware Engineer", limit: int =
         pm.search_manager = search_manager
         result = pm.run_pipeline(
             query=query,
+            location=location,
             limit=limit,
-            shortlist_size=limit
+            shortlist_size=limit,
+            candidate_profile=candidate_profile,
+            interactive=interactive,
         )
         # PipelineManager persists shortlisted jobs; return accepted list for API
         # For backward compatibility, return the shortlisted Job objects if available
-        shortlisted = []
-        try:
-            # The pipeline returns counts and prepared applications; reconstruct list
-            # from the prepared_applications payload where possible.
-            for item in result.get("prepared_applications", []):
-                job_info = item.get("job")
-                # Create lightweight Job-like dict for response
-                shortlisted.append(job_info)
-        except Exception:
-            pass
+        shortlisted = result.get("jobs", [])
 
         logger.info(f"Pipeline run complete. Found: {result.get('total_found')}, Shortlisted: {result.get('shortlisted_count')}")
-        return shortlisted, {"raw": result.get("total_found"), "filtered": result.get("accepted_count")}, None
+        return shortlisted, result, None
     except Exception as e:
         logger.error(f"Error executing search cycle: {e}")
         raise
@@ -180,6 +162,38 @@ class JobSearchScheduler:
             self.thread.join(timeout=2)
 
 
+scheduler = JobSearchScheduler()
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """Initialize durable state before serving requests and stop the worker cleanly."""
+    db_engine.initialize()
+    if settings.SCHEDULER_ENABLED:
+        scheduler.start()
+    try:
+        yield
+    finally:
+        scheduler.stop()
+
+
+app = FastAPI(
+    title="AI Embedded Job Automation API",
+    description="Backend service for fetching, filtering, and optimizing embedded systems job applications.",
+    version="1.0.0",
+    lifespan=lifespan,
+)
+
+# Enable CORS for frontend integration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
 @app.get("/")
 def read_root():
     return {
@@ -192,26 +206,43 @@ def read_root():
 @app.get("/api/jobs")
 def get_jobs(
     search_query: str = Query("Embedded Firmware Engineer", alias="query"),
-    limit: int = Query(20, ge=1, le=100)
+    location: str = Query("", max_length=120),
+    limit: int = Query(20, ge=1, le=100),
+    candidate_skills: List[str] = Query(default=[]),
+    candidate_experience: str = Query("", max_length=120),
 ):
     try:
-        filtered_jobs, _, _ = execute_search_cycle(query=search_query, limit=limit)
-        results = []
-        for j in filtered_jobs:
-            # Handle Job objects and dictionary results
-            if isinstance(j, dict):
-                job_dict = j
-            elif hasattr(j, "to_dict") and callable(getattr(j, "to_dict")):
-                job_dict = j.to_dict()
-            else:
-                job_dict = asdict(j)
-            results.append(job_dict)
-            
+        profile = {"skills": candidate_skills, "experience": candidate_experience} if (candidate_skills or candidate_experience) else None
+        results, pipeline_result, _ = execute_search_cycle(
+            query=search_query,
+            location=location,
+            limit=limit,
+            candidate_profile=profile,
+            interactive=True,
+        )
+        provider_status = pipeline_result.get("provider_status", {})
+        if provider_status and not any(item.get("status") in {"success", "partial"} for item in provider_status.values()):
+            raise HTTPException(503, detail={"message": "All live job providers failed", "providers": provider_status})
+        successful = [item for item in provider_status.values() if item.get("status") in {"success", "partial"}]
+        failed = [item for item in provider_status.values() if item.get("status") not in {"success", "partial"}]
+        response_status = "partial_success" if successful and failed else "success"
+        result_state = "matches" if results else "zero_matches"
         return {
-            "status": "success",
-            "total_found": len(results),
+            "status": response_status,
+            "result_state": result_state,
+            "query": search_query,
+            "location": location,
+            "total_found": pipeline_result.get("total_found", 0),
+            "total_returned": len(results),
+            "accepted_count": pipeline_result.get("accepted_count", 0),
+            "rejected_count": pipeline_result.get("total_rejected", 0),
+            "persisted_count": pipeline_result.get("persisted_count", 0),
+            "persistence_errors": pipeline_result.get("persistence_errors", []),
+            "providers": provider_status,
             "jobs": results
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

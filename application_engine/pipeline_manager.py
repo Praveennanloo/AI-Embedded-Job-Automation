@@ -1,5 +1,6 @@
 from typing import List, Dict, Any, Optional
 import logging
+from dataclasses import asdict
 
 from search_engine.search_manager import SearchManager
 from ai_engine.job_filter import JobFilter
@@ -25,10 +26,13 @@ class PipelineManager:
     def run_pipeline(
         self,
         query: str = "Embedded Firmware Engineer",
+        location: str = "",
         limit: int = 50,
         shortlist_size: int = 10,
         resume_owner: Optional[Dict[str, str]] = None,
-        generate_applications: bool = False
+        candidate_profile: Optional[Dict[str, Any]] = None,
+        generate_applications: bool = False,
+        interactive: bool = False,
     ) -> Dict[str, Any]:
         # 1. Collect jobs
         raw_jobs: List[Job] = []
@@ -38,11 +42,16 @@ class PipelineManager:
             search_method = self.search_manager.search
             parameters = inspect.signature(search_method).parameters
 
+            kwargs = {}
             if "query" in parameters:
-                raw_jobs = search_method(query=query)
-            else:
-                # Backward compatibility with older SearchManager/test doubles
-                raw_jobs = search_method()
+                kwargs["query"] = query
+            if "location" in parameters:
+                kwargs["location"] = location
+            if "limit" in parameters:
+                kwargs["limit"] = limit
+            if "interactive" in parameters:
+                kwargs["interactive"] = interactive
+            raw_jobs = search_method(**kwargs)
 
         except Exception as exc:
             app_logger.error(f"Search failed: {exc}")
@@ -51,10 +60,6 @@ class PipelineManager:
             total_found = sum(int(v) for v in self.search_manager.provider_results.values() if isinstance(v, (int, float)))
         else:
             total_found = len(raw_jobs)
-
-        # apply limit
-        if limit and isinstance(limit, int) and limit > 0:
-            raw_jobs = raw_jobs[:limit]
 
         # 2-3. Normalize, dedupe and filter (returns accepted jobs)
         accepted = self.filter.filter_jobs(raw_jobs)
@@ -73,9 +78,24 @@ class PipelineManager:
             except Exception as exc:
                 app_logger.error(f"Eligibility check failed for {getattr(job,'url', job)}: {exc}")
 
+        if candidate_profile:
+            ranked_by_url = {
+                item["url"]: item
+                for item in self.filter.rank_jobs_for_candidate(eligible, candidate_profile)
+            }
+            for job in eligible:
+                ranked = ranked_by_url.get(job.url)
+                if ranked:
+                    job.match_score = int(round(ranked["final_score"]))
+                    job.match_breakdown = {
+                        **getattr(job, "match_breakdown", {}),
+                        "candidate_ranking": ranked,
+                    }
+
         # 6. Shortlist top N
         eligible.sort(key=lambda j: getattr(j, "match_score", 0), reverse=True)
-        shortlisted = eligible[:shortlist_size]
+        requested_limit = limit if isinstance(limit, int) and limit > 0 else shortlist_size
+        shortlisted = eligible[:min(shortlist_size, requested_limit)]
 
         prepared_applications = []
 
@@ -126,31 +146,34 @@ class PipelineManager:
                 app_logger.error(f"Pipeline finalization failed for {getattr(job,'url', job)}: {exc}")
 
 
-        # persist shortlisted jobs in DB if batch save available
+        # Persist shortlisted jobs. Database.save_jobs returns the number of
+        # successful commits, never merely the number of attempted writes.
         persisted_count = 0
+        persistence_errors = []
         try:
             if hasattr(self.db, "save_jobs"):
-                try:
-                    persisted_count = int(self.db.save_jobs(shortlisted) or 0)
-                except Exception:
-                    # fall back to per-job save
-                    persisted_count = 0
-                    for j in shortlisted:
-                        try:
-                            if hasattr(self.db, "save_job"):
-                                self.db.save_job(j)
-                                persisted_count += 1
-                        except Exception:
-                            app_logger.exception("Failed saving job")
+                persisted_count = int(self.db.save_jobs(shortlisted) or 0)
+                persistence_errors = list(getattr(self.db, "last_save_errors", []))
+                if persisted_count != len(shortlisted) and not persistence_errors:
+                    persistence_errors.append(
+                        getattr(self.db, "last_error", None) or "One or more jobs were not persisted"
+                    )
             else:
                 for j in shortlisted:
                     try:
                         if hasattr(self.db, "save_job"):
-                            self.db.save_job(j)
-                            persisted_count += 1
-                    except Exception:
-                        app_logger.exception("Failed saving job")
-        except Exception:
+                            if self.db.save_job(j):
+                                persisted_count += 1
+                            else:
+                                persistence_errors.append(
+                                    f"Failed to save job {getattr(j, 'url', '<unknown>')}"
+                                )
+                    except Exception as exc:
+                        message = f"Failed saving job {getattr(j, 'url', '<unknown>')}: {exc}"
+                        persistence_errors.append(message)
+                        app_logger.exception(message)
+        except Exception as exc:
+            persistence_errors.append(f"Batch save_jobs failed: {exc}")
             app_logger.exception("Batch save_jobs failed")
 
         # Build structured result expected by Block 1B while preserving previous fields
@@ -160,10 +183,15 @@ class PipelineManager:
             # rejected = found - accepted
             "total_rejected": max(0, total_found - len(accepted)),
             "shortlisted_jobs": [p.get("job") for p in prepared_applications],
+            "jobs": [asdict(job) for job in shortlisted],
             "persisted_count": persisted_count,
+            "persistence_errors": persistence_errors,
+            "provider_status": getattr(self.search_manager, "provider_status", {}),
+            "query": query,
+            "location": location,
 
             # Backwards-compatible fields
-            "limited_to": len(raw_jobs),
+            "limited_to": len(shortlisted),
             "accepted_count": len(accepted),
             "eligible_count": len(eligible),
             "shortlisted_count": len(shortlisted),
