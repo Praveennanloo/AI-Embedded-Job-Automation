@@ -110,7 +110,13 @@ class JobFilter:
 
     NON_TARGET_ROLE_TITLE_PATTERNS = [
         r"\bsales\b",
+        r"\bbusiness development\b",
+        r"\baccount executive\b",
         r"\baccount manager\b",
+        r"\bmarketing\b",
+        r"\bsupport\b",
+        r"\bquality assurance\b",
+        r"\bqa\b",
         r"\bconsultant\b",
         r"\bpre[- ]sales\b",
         r"\bfield engineer\b",
@@ -120,6 +126,7 @@ class JobFilter:
         "embedded",
         "firmware",
         "driver",
+        "drivers",
         "linux kernel",
         "device driver",
         "linux device driver",
@@ -450,29 +457,149 @@ class JobFilter:
         return self.understand_job_description(job, profile)
 
     def _identify_role_category(self, job: Job) -> str:
+        """
+        Classify the job using exact keyword matching.
+
+        Important:
+        Do not use raw substring checks such as:
+            "arm" in text
+            "embedded" in text
+
+        because those can create false positives.
+
+        Example:
+            arm -> harmonic
+            intern -> international
+        """
+        title = self.normalize_text(getattr(job, "title", "")).lower()
+        if self._title_is_non_target_role(title):
+            return "Unrelated"
+
         text = self._job_text(job).lower()
+
         if not text:
             return "Unrelated"
 
         category_rules = [
-            ("Embedded Linux", ["embedded linux", "linux driver", "linux kernel", "bsp", "u-boot", "yocto", "device tree", "linux device driver"]),
-            ("Embedded C", ["embedded c", "embedded-c", "microcontroller c", "firmware c"]),
-            ("Firmware", ["firmware", "firmware engineer", "embedded firmware"]),
-            ("IoT", ["iot", "internet of things", "sensor node", "embedded iot"]),
-            ("RTOS", ["rtos", "freertos", "embedded rtos", "real time operating system"]),
-            ("Device Drivers", ["device driver", "kernel driver", "linux device driver", "driver development"]),
-            ("Embedded Software", ["embedded software", "embedded systems", "embedded engineer"]),
-            ("Electronics", ["electronics", "ece", "hardware", "pcb", "schematic"]),
+            (
+                "Embedded Linux",
+                [
+                    "embedded linux",
+                    "linux driver",
+                    "linux drivers",
+                    "linux kernel",
+                    "bsp",
+                    "u-boot",
+                    "yocto",
+                    "device tree",
+                    "linux device driver",
+                ],
+            ),
+            (
+                "Embedded C",
+                [
+                    "embedded c",
+                    "embedded-c",
+                    "microcontroller c",
+                    "firmware c",
+                ],
+            ),
+            (
+                "Firmware",
+                [
+                    "firmware",
+                    "embedded firmware",
+                ],
+            ),
+            (
+                "Device Drivers",
+                [
+                    "device driver",
+                    "device drivers",
+                    "linux drivers",
+                    "kernel driver",
+                    "linux device driver",
+                    "driver development",
+                ],
+            ),
+            (
+                "RTOS",
+                [
+                    "rtos",
+                    "freertos",
+                    "embedded rtos",
+                    "real time operating system",
+                ],
+            ),
+            (
+                "IoT",
+                [
+                    "iot",
+                    "internet of things",
+                    "sensor node",
+                    "embedded iot",
+                ],
+            ),
+            (
+                "Embedded Software",
+                [
+                    "embedded software",
+                    "embedded systems",
+                    "embedded engineer",
+                ],
+            ),
+            (
+                "Electronics",
+                [
+                    "electronics",
+                    "ece",
+                    "hardware",
+                    "pcb",
+                    "schematic",
+                ],
+            ),
         ]
 
         for category, keywords in category_rules:
-            if any(keyword in text for keyword in keywords):
+            if self._find_keyword_hits(text, keywords):
                 return category
 
-        if "embedded" in text or "microcontroller" in text or "arm" in text or "stm32" in text or "esp32" in text:
+        # Hardware/platform keywords can identify a generic
+        # Embedded Systems role, but only through exact matching.
+        hardware_platform_keywords = [
+            "arm",
+            "mcu",
+            "microcontroller",
+            "microcontrollers",
+            "stm32",
+            "esp32",
+            "uart",
+            "spi",
+            "i2c",
+            "gpio",
+        ]
+
+        if self._find_keyword_hits(text, hardware_platform_keywords):
             return "Embedded Systems"
 
         return "Unrelated"
+
+    def _title_is_non_target_role(self, title: str) -> bool:
+        """Return whether the advertised role itself is outside the target."""
+        title = self.normalize_text(title).lower()
+        if not title:
+            return False
+
+        # QA is only rejected here when it is a generic QA title. An
+        # explicitly embedded/firmware QA role remains eligible for the
+        # existing technology/responsibility checks.
+        if re.search(r"\b(?:qa|quality assurance)\b", title):
+            return not bool(self._find_keyword_hits(
+                title, ["embedded", "firmware", "device driver", "rtos", "hardware"]
+            ))
+
+        return any(re.search(pattern, title) for pattern in self.NON_TARGET_ROLE_TITLE_PATTERNS
+                   if pattern not in {r"\bqa\b", r"\bquality assurance\b"})
 
     def _profile_skill_set(self, profile: dict = None):
         profile = profile or {}
@@ -985,10 +1112,28 @@ class JobFilter:
         return deduped
 
     def _find_keyword_hits(self, text: str, keywords: List[str]) -> List[str]:
+        """
+        Find complete keyword/phrase matches.
+
+        Prevents false positives such as:
+            intern -> international
+            arm    -> harmonic
+        """
+        text = (text or "").lower()
+
         hits = []
+
         for keyword in keywords:
-            if keyword in text:
+            keyword = keyword.strip().lower()
+
+            if not keyword:
+                continue
+
+            pattern = rf"(?<![a-z0-9]){re.escape(keyword)}(?![a-z0-9])"
+
+            if re.search(pattern, text):
                 hits.append(keyword)
+
         return hits
 
     def _has_embedded_hardware_context(self, text: str) -> bool:
@@ -1029,53 +1174,146 @@ class JobFilter:
         return any(keyword in text for keyword in self.GENERIC_UNRELATED_KEYWORDS)
 
     def document_matches_target(self, job: Job) -> bool:
+        """
+        Determine whether a job genuinely belongs to the
+        embedded / firmware / hardware target.
+
+        All keyword checks use _find_keyword_hits() so that
+        substring false positives are avoided.
+        """
+        title = self.normalize_text(getattr(job, "title", "")).lower()
+        if self._title_is_non_target_role(title):
+            return False
+
         text = self._job_text(job).lower()
+
         if not text:
             return False
 
-        primary_hits = self._find_keyword_hits(text, self.PRIMARY_EMBEDDED_KEYWORDS)
-        hardware_hits = self._find_keyword_hits(text, self.HARDWARE_CONTEXT_KEYWORDS)
-        support_hits = self._find_keyword_hits(text, self.SUPPORTING_KEYWORDS)
+        primary_hits = self._find_keyword_hits(
+            text,
+            self.PRIMARY_EMBEDDED_KEYWORDS,
+        )
 
-        if "linux kernel" in text and not self._has_embedded_hardware_context(text):
+        hardware_hits = self._find_keyword_hits(
+            text,
+            self.HARDWARE_CONTEXT_KEYWORDS,
+        )
+
+        support_hits = self._find_keyword_hits(
+            text,
+            self.SUPPORTING_KEYWORDS,
+        )
+
+        embedded_context_keywords = [
+            "embedded",
+            "firmware",
+            "rtos",
+            "freertos",
+            "linux kernel",
+            "driver",
+            "microcontroller",
+            "arm",
+            "mcu",
+            "stm32",
+            "esp32",
+            "uart",
+            "spi",
+            "i2c",
+            "gpio",
+            "bsp",
+            "yocto",
+            "u-boot",
+            "buildroot",
+            "iot",
+        ]
+
+        context_hits = self._find_keyword_hits(
+            text,
+            embedded_context_keywords,
+        )
+
+        # A bare "linux kernel" mention is not sufficient for this
+        # embedded/hardware target unless there is additional hardware context.
+        linux_kernel_hits = self._find_keyword_hits(text, ["linux kernel"])
+        non_kernel_hardware_hits = [
+            hit for hit in hardware_hits
+            if hit != "linux kernel"
+        ]
+        if linux_kernel_hits and not non_kernel_hardware_hits:
             return False
 
+        # Strong primary embedded keywords are sufficient after the special
+        # linux-kernel guard above.
         if primary_hits:
             return True
 
-        if "linux" in text and hardware_hits:
+        # Linux by itself is not enough.
+        if self._find_keyword_hits(text, ["linux"]):
+            if hardware_hits:
+                return True
+
+        # Firmware must have an embedded/hardware context.
+        firmware_hits = self._find_keyword_hits(text, ["firmware"])
+
+        if firmware_hits:
+            firmware_context = self._find_keyword_hits(
+                text,
+                [
+                    "embedded",
+                    "arm",
+                    "mcu",
+                    "microcontroller",
+                    "iot",
+                    "rtos",
+                    "stm32",
+                    "esp32",
+                ],
+            )
+
+            if firmware_context:
+                return True
+
+        # Embedded/driver/RTOS/kernel language must have
+        # a real hardware/platform context.
+        software_embedded_hits = self._find_keyword_hits(
+            text,
+            [
+                "embedded",
+                "firmware",
+                "rtos",
+                "freertos",
+                "linux kernel",
+                "driver",
+                "kernel driver",
+            ],
+        )
+
+        hardware_context_hits = self._find_keyword_hits(
+            text,
+            [
+                "arm",
+                "mcu",
+                "microcontroller",
+                "stm32",
+                "esp32",
+                "uart",
+                "spi",
+                "i2c",
+                "gpio",
+                "bsp",
+                "yocto",
+                "u-boot",
+            ],
+        )
+
+        if software_embedded_hits and hardware_context_hits:
             return True
 
-        if "firmware" in text and ("embedded" in text or "arm" in text or "mcu" in text or "microcontroller" in text or "iot" in text):
+        # Supporting keywords only count when accompanied by
+        # explicit embedded/hardware context.
+        if support_hits and context_hits:
             return True
-
-        if ("embedded" in text or "firmware" in text or "rtos" in text or "freertos" in text or "kernel" in text or "driver" in text) and (
-            "arm" in text
-            or "mcu" in text
-            or "microcontroller" in text
-            or "stm32" in text
-            or "esp32" in text
-            or "uart" in text
-            or "spi" in text
-            or "i2c" in text
-            or "gpio" in text
-            or "bsp" in text
-            or "yocto" in text
-            or "u-boot" in text
-            or "firmware" in text
-            or "driver" in text
-            or "embedded" in text
-        ):
-            return True
-
-        if support_hits and any(token in text for token in ["embedded", "firmware", "driver", "microcontroller", "arm", "iot", "rtos", "freertos", "linux kernel", "bsp", "yocto", "u-boot"]):
-            return True
-
-        if self._is_generic_unrelated_role(text):
-            return False
-
-        if "linux" in text and "kernel" in text and not hardware_hits:
-            return False
 
         return False
 
@@ -1097,7 +1335,7 @@ class JobFilter:
             return False
 
         for keyword in self.ENTRY_LEVEL_KEYWORDS:
-            if keyword in text:
+            if self._find_keyword_hits(text, [keyword]):
                 return True
 
         return bool(re.search(r"0\s*[-–]\s*[12]\s*\s*years?", text)) or bool(re.search(r"0\s*[-–]?\s*1\s*years?", text))
@@ -1186,6 +1424,9 @@ class JobFilter:
             reasons.append("Missing or invalid URL")
 
         text = self._job_text(job).lower()
+
+        if self._title_is_non_target_role(getattr(job, "title", "")):
+            reasons.append("Advertised role is a non-target sales, support, marketing, or QA position")
 
         if not self.document_matches_target(job):
             if self._is_generic_unrelated_role(text):

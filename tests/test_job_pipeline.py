@@ -230,6 +230,25 @@ def test_linux_kernel_job_without_embedded_context_is_rejected():
     assert any("embedded" in reason.lower() or "hardware" in reason.lower() for reason in job.rejection_reasons)
 
 
+def test_international_does_not_count_as_internship_or_entry_level():
+    filterer = JobFilter()
+    job = Job(
+        "Embedded Linux Engineer",
+        "Acme Devices",
+        "India",
+        "Not Specified",
+        "RemoteOK",
+        "https://example.com/international-linux",
+        ["Linux"],
+        "",
+        description="Join our international team developing embedded Linux device software.",
+    )
+
+    assert filterer.is_entry_level_or_intern(job) is False
+    assert filterer.filter_jobs([job]) == []
+    assert any("entry-level" in reason.lower() for reason in job.rejection_reasons)
+
+
 def test_strong_embedded_c_fresher_job_is_accepted():
     filterer = JobFilter()
     job = Job(
@@ -444,6 +463,56 @@ def test_non_target_customer_facing_roles_are_rejected_even_with_entry_text():
 
     assert filterer.filter_jobs(jobs) == []
     assert all(job.rejection_reasons for job in jobs)
+
+
+def test_business_development_role_is_rejected_when_description_mentions_embedded_linux():
+    filterer = JobFilter()
+    job = Job(
+        "Business Development Representative",
+        "Canonical",
+        "India",
+        "Entry level",
+        "Greenhouse",
+        "https://example.com/business-development",
+        ["Ubuntu", "IoT", "Linux"],
+        "",
+        description=(
+            "Help customers adopt Ubuntu and embedded Linux IoT solutions. "
+            "This is a quota-carrying sales role responsible for pipeline growth."
+        ),
+    )
+
+    assert filterer.document_matches_target(job) is False
+    assert filterer._identify_role_category(job) == "Unrelated"
+    assert filterer.filter_jobs([job]) == []
+    assert any("non-target" in reason.lower() for reason in job.rejection_reasons)
+
+
+def test_linux_support_and_generic_qa_roles_are_rejected_but_linux_engineer_passes():
+    filterer = JobFilter()
+    jobs = [
+        Job(
+            "Associate Linux Support Engineer", "Canonical", "India", "Associate",
+            "Greenhouse", "https://example.com/linux-support", ["Linux"], "",
+            description="Provide technical support and troubleshoot customer Linux installations.",
+        ),
+        Job(
+            "QA Engineer", "Canonical", "India", "Graduate",
+            "Greenhouse", "https://example.com/qa-linux", ["Linux"], "",
+            description="Test Linux applications for quality and report defects.",
+        ),
+        Job(
+            "Linux Engineer", "Canonical", "India", "Graduate",
+            "Greenhouse", "https://example.com/linux-engineer", ["Linux"], "",
+            description="Develop and debug Linux drivers and boot-time device integration.",
+        ),
+    ]
+
+    accepted = filterer.filter_jobs(jobs)
+
+    assert [job.title for job in accepted] == ["Linux Engineer"]
+    assert jobs[0].rejection_reasons
+    assert jobs[1].rejection_reasons
 
 
 def test_mid_senior_embedded_role_is_rejected_but_fresher_engineering_roles_pass():
