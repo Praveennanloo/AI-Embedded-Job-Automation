@@ -256,6 +256,43 @@ def test_greenhouse_requests_supported_full_content_and_maps_it(monkeypatch):
     assert jobs[0].description == "Full embedded firmware job description."
 
 
+def test_greenhouse_does_not_apply_limit_before_pipeline_filtering(monkeypatch):
+    import search_engine.providers.greenhouse_provider as module
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "jobs": [
+                    {
+                        "id": 10,
+                        "title": "Senior Embedded Firmware Engineer",
+                        "location": {"name": "India"},
+                        "absolute_url": "https://example.test/senior",
+                        "description": "Senior embedded firmware engineering.",
+                    },
+                    {
+                        "id": 11,
+                        "title": "Graduate Embedded Firmware Engineer",
+                        "location": {"name": "India"},
+                        "absolute_url": "https://example.test/graduate",
+                        "description": "Graduate embedded firmware engineering.",
+                    },
+                ]
+            }
+
+    monkeypatch.setattr(module.settings, "PROVIDER_MAX_RETRIES", 0)
+    monkeypatch.setattr(module.httpx, "get", lambda *args, **kwargs: Response())
+    provider = GreenhouseProvider()
+    provider.BOARDS = [("Canonical", "https://good")]
+
+    jobs = provider.search("Embedded Firmware Engineer", "India", limit=1)
+
+    assert [job.source_job_id for job in jobs] == ["10", "11"]
+
+
 def test_provider_query_matching_allows_relevant_partial_intent_match():
     job = Job(
         title="Firmware Engineer",
@@ -293,6 +330,25 @@ def test_provider_query_matching_rejects_generic_partial_match():
 
     assert match["matched"] is False
     assert match["matched_terms"] == ["engineer"]
+
+
+def test_provider_query_matching_does_not_match_substrings_in_boilerplate():
+    job = Job(
+        title="Organisational Development Associate",
+        company="Acme",
+        location="Remote",
+        experience="Entry level",
+        source="Greenhouse",
+        url="https://example.test/hr",
+        skills=[],
+        posted_date="",
+        description="Be embedded inside a team and support engineering development.",
+    )
+
+    match = RemoteOKProvider.query_match_details(job, "Embedded Firmware Engineer")
+
+    assert match["matched"] is False
+    assert match["matched_terms"] == ["embedded"]
 
 
 def test_provider_query_matching_requires_junior_intent():

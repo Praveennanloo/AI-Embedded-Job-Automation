@@ -242,7 +242,11 @@ class GreenhouseProvider(BaseProvider):
                     matched_jobs.append(job)
             jobs = matched_jobs
         jobs = [job for job in jobs if self.location_matches(job, location)]
-        jobs = jobs[:limit] if limit else jobs
+        # Greenhouse has no server-side query/eligibility filtering. Do not
+        # truncate the board feed here: the first `limit` query matches can
+        # all be senior or unrelated roles, hiding eligible jobs later in the
+        # feed. PipelineManager applies the final limit after filtering and
+        # ranking.
         board_values = list(self.last_status["boards"].values())
         successes = [item for item in board_values if item["status"] == "success"]
         failures = [item for item in board_values if item["status"] != "success"]

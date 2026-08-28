@@ -73,7 +73,13 @@ class BaseProvider(ABC):
             }
 
         text = cls._query_text(job)
-        matched_terms = [term for term in terms if term in text]
+        # Match complete query tokens. Raw substring matching makes generic
+        # Greenhouse boilerplate turn unrelated roles into candidates (for
+        # example, "engineer" matching "engineering").
+        matched_terms = [
+            term for term in terms
+            if re.search(rf"(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])", text)
+        ]
         intent_matches = [
             term for term in matched_terms if term in cls.QUERY_INTENT_TERMS
         ]
